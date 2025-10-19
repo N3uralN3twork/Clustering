@@ -1,0 +1,367 @@
+name: Memory Safety Checks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM UTC
+
+env:
+  VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
+
+jobs:
+  msvc-address-sanitizer:
+    name: MSVC AddressSanitizer
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Configure with AddressSanitizer
+      shell: cmd
+      run: |
+        cmake -B build -S . ^
+          -DCMAKE_BUILD_TYPE=Debug ^
+          -DCMAKE_CXX_FLAGS="/fsanitize=address /Zi" ^
+          -DBUILD_TESTS=ON ^
+          -DBUILD_BENCHMARKS=OFF
+
+    - name: Build with ASan
+      shell: cmd
+      run: |
+        cmake --build build --config Debug -j %NUMBER_OF_PROCESSORS%
+
+    - name: Run tests with AddressSanitizer
+      shell: cmd
+      continue-on-error: true
+      run: |
+        cd build
+        set ASAN_OPTIONS=windows_hook_rtl_allocators=true:detect_leaks=0:halt_on_error=1
+        ctest -C Debug --output-on-failure --timeout 300 > ..\asan_results.txt 2>&1
+
+    - name: Check for ASan violations
+      shell: pwsh
+      run: |
+        if (Test-Path asan_results.txt) {
+          $content = Get-Content asan_results.txt -Raw
+          if ($content -match "ERROR: AddressSanitizer") {
+            Write-Host "::error::AddressSanitizer detected memory errors!"
+            Get-Content asan_results.txt
+            exit 1
+          } else {
+            Write-Host "✅ No AddressSanitizer errors detected"
+          }
+        }
+
+    - name: Upload ASan results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: asan-results
+        path: asan_results.txt
+
+  clang-sanitizers:
+    name: Clang-cl Sanitizers
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        sanitizer: [address]  # More sanitizers can be added as supported
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Install LLVM/Clang
+      shell: pwsh
+      run: |
+        choco install llvm -y
+        # Add LLVM to PATH
+        $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Configure with Clang-cl and ${{ matrix.sanitizer }}
+      shell: cmd
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        cmake -B build -S . ^
+          -G "Ninja" ^
+          -DCMAKE_C_COMPILER=clang-cl ^
+          -DCMAKE_CXX_COMPILER=clang-cl ^
+          -DCMAKE_BUILD_TYPE=Debug ^
+          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer -g" ^
+          -DBUILD_TESTS=ON
+
+    - name: Build
+      shell: cmd
+      run: cmake --build build
+
+    - name: Run tests
+      shell: cmd
+      continue-on-error: true
+      run: |
+        cd build
+        ctest --output-on-failure > ..\clang_${{ matrix.sanitizer }}_results.txt 2>&1
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: clang-${{ matrix.sanitizer }}-results
+        path: clang_${{ matrix.sanitizer }}_results.txt
+
+  dr-memory:
+    name: Dr. Memory Analysis
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Install Dr. Memory
+      shell: pwsh
+      run: |
+        # Download and install Dr. Memory
+        $drmemoryUrl = "https://github.com/DynamoRIO/drmemory/releases/download/release_2.6.0/DrMemory-Windows-2.6.0.zip"
+        Invoke-WebRequest -Uri $drmemoryUrl -OutFile drmemory.zip
+        Expand-Archive drmemory.zip -DestinationPath C:\
+        echo "C:\DrMemory-Windows-2.6.0\bin64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Configure and Build
+      shell: cmd
+      run: |
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
+        cmake --build build --config Debug
+
+    - name: Run Dr. Memory
+      shell: cmd
+      continue-on-error: true
+      run: |
+        cd build
+        FOR %%G IN (Debug\*test*.exe) DO (
+          echo Running Dr. Memory on %%G
+          drmemory.exe -batch -light -- %%G
+        )
+
+    - name: Collect Dr. Memory results
+      shell: pwsh
+      run: |
+        # Dr. Memory creates results in DrMemory-* directories
+        $results = Get-ChildItem -Path . -Directory -Filter "DrMemory-*" -Recurse
+        if ($results) {
+          New-Item -ItemType Directory -Force -Path drmemory_reports
+          foreach ($result in $results) {
+            Copy-Item -Path "$($result.FullName)\*" -Destination drmemory_reports -Recurse -Force
+          }
+          
+          # Check for errors
+          $errorFiles = Get-ChildItem -Path drmemory_reports -Filter "results.txt" -Recurse
+          $hasErrors = $false
+          foreach ($file in $errorFiles) {
+            $content = Get-Content $file.FullName -Raw
+            if ($content -match "ERRORS FOUND:|LEAK") {
+              $hasErrors = $true
+              Write-Host "::error::Dr. Memory found issues in $($file.FullName)"
+            }
+          }
+          
+          if ($hasErrors) {
+            exit 1
+          }
+        }
+
+    - name: Upload Dr. Memory results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: drmemory-results
+        path: drmemory_reports/
+
+  static-analysis:
+    name: Static Analysis (PVS-Studio & CppCheck)
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Install CppCheck
+      shell: pwsh
+      run: |
+        choco install cppcheck -y
+
+    - name: Configure project
+      shell: cmd
+      run: |
+        cmake -B build -S . ^
+          -DCMAKE_BUILD_TYPE=Debug ^
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
+          -DBUILD_TESTS=ON
+
+    - name: Run CppCheck
+      shell: cmd
+      continue-on-error: true
+      run: |
+        cppcheck --project=build/compile_commands.json ^
+          --enable=all ^
+          --inconclusive ^
+          --xml ^
+          --xml-version=2 ^
+          --suppress=missingIncludeSystem ^
+          --suppress=unmatchedSuppression ^
+          -I include ^
+          src/ ^
+          2> cppcheck_report.xml
+
+    - name: Convert CppCheck results to readable format
+      shell: pwsh
+      run: |
+        if (Test-Path cppcheck_report.xml) {
+          [xml]$xml = Get-Content cppcheck_report.xml
+          $errors = $xml.results.errors.error
+          
+          if ($errors) {
+            echo "# CppCheck Analysis Results" > cppcheck_report.md
+            echo "" >> cppcheck_report.md
+            echo "| Severity | File | Line | Message |" >> cppcheck_report.md
+            echo "|----------|------|------|---------|" >> cppcheck_report.md
+            
+            foreach ($error in $errors) {
+              $severity = $error.severity
+              $msg = $error.msg
+              $file = $error.location.file
+              $line = $error.location.line
+              echo "| $severity | $file | $line | $msg |" >> cppcheck_report.md
+            }
+            
+            # Check for high-severity issues
+            $criticalErrors = $errors | Where-Object { $_.severity -in @("error", "warning") }
+            if ($criticalErrors) {
+              Write-Host "::warning::CppCheck found $($criticalErrors.Count) critical issues"
+            }
+          }
+        }
+
+    - name: Upload CppCheck results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: cppcheck-results
+        path: |
+          cppcheck_report.xml
+          cppcheck_report.md
+
+  memory-leak-detection:
+    name: Memory Leak Detection
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Configure with Debug info
+      shell: cmd
+      run: |
+        cmake -B build -S . ^
+          -DCMAKE_BUILD_TYPE=Debug ^
+          -DBUILD_TESTS=ON
+
+    - name: Build
+      shell: cmd
+      run: cmake --build build --config Debug
+
+    - name: Enable Windows Memory Leak Detection
+      shell: cmd
+      run: |
+        cd build\Debug
+        echo Running tests with Windows CRT leak detection...
+        set _NO_DEBUG_HEAP=1
+        ctest -C Debug --output-on-failure > ..\..\leak_detection.txt 2>&1
+
+    - name: Check for leaks
+      shell: pwsh
+      run: |
+        if (Test-Path leak_detection.txt) {
+          $content = Get-Content leak_detection.txt -Raw
+          if ($content -match "memory leak|Detected memory leaks") {
+            Write-Host "::error::Memory leaks detected!"
+            Get-Content leak_detection.txt
+            exit 1
+          } else {
+            Write-Host "✅ No memory leaks detected"
+          }
+        }
+
+    - name: Upload leak detection results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: leak-detection-results
+        path: leak_detection.txt
+
+  summary:
+    name: Memory Safety Summary
+    runs-on: windows-latest
+    needs: [msvc-address-sanitizer, dr-memory, static-analysis, memory-leak-detection]
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate summary report
+      shell: pwsh
+      run: |
+        echo "# Memory Safety Analysis Summary" > summary.md
+        echo "" >> summary.md
+        echo "## Test Results" >> summary.md
+        echo "" >> summary.md
+        
+        # Check each job result
+        $jobs = @{
+          "MSVC AddressSanitizer" = "${{ needs.msvc-address-sanitizer.result }}"
+          "Dr. Memory" = "${{ needs.dr-memory.result }}"
+          "Static Analysis" = "${{ needs.static-analysis.result }}"
+          "Memory Leak Detection" = "${{ needs.memory-leak-detection.result }}"
+        }
+        
+        foreach ($job in $jobs.GetEnumerator()) {
+          $status = if ($job.Value -eq "success") { "✅ Passed" } else { "❌ Failed" }
+          echo "- **$($job.Key)**: $status" >> summary.md
+        }
+        
+        echo "" >> summary.md
+        echo "## Details" >> summary.md
+        echo "See individual job artifacts for detailed reports." >> summary.md
+
+    - name: Upload summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: memory-safety-summary
+        path: summary.md

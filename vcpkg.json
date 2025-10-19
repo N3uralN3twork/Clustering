@@ -1,6 +1,14 @@
 {
-  "name" : "clustering",
-  "version" : "1.0.0",
-  "description" : "Clustering Metrics",
-  "dependencies" : ["eigen3", "fmt", "boost-math", "benchmark"]
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "qc",
+  "version": "1.0.0",
+  "description": "High-performance clustering library with validation metrics",
+  "dependencies": [
+    "eigen3",
+    "fmt",
+    "boost-math",
+    "benchmark",
+    "gtest"
+  ],
+  "builtin-baseline": "latest"
 }

@@ -1,0 +1,190 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Weekly on Monday at midnight UTC
+  workflow_dispatch:      # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-vcpkg-baseline:
+    name: Update vcpkg Baseline
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
+
+    - name: Get current baseline
+      id: current_baseline
+      shell: pwsh
+      run: |
+        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+        $currentBaseline = $vcpkgJson.'builtin-baseline'
+        echo "current=$currentBaseline" >> $env:GITHUB_OUTPUT
+        echo "Current baseline: $currentBaseline"
+
+    - name: Update to latest baseline
+      id: update_baseline
+      shell: pwsh
+      run: |
+        # Get latest commit from vcpkg repository
+        $latestCommit = (git ls-remote https://github.com/microsoft/vcpkg.git HEAD | Select-Object -First 1).Split()[0]
+        echo "latest=$latestCommit" >> $env:GITHUB_OUTPUT
+        echo "Latest baseline: $latestCommit"
+        
+        # Update vcpkg.json with new baseline
+        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+        $vcpkgJson.'builtin-baseline' = $latestCommit
+        $vcpkgJson | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json
+        
+        # Check if there are changes
+        $changes = git diff vcpkg.json
+        if ($changes) {
+          echo "updates_available=true" >> $env:GITHUB_OUTPUT
+          echo "Changes detected in vcpkg.json"
+        } else {
+          echo "updates_available=false" >> $env:GITHUB_OUTPUT
+          echo "No changes needed - already up to date"
+        }
+
+    - name: Test build with updated dependencies
+      if: steps.update_baseline.outputs.updates_available == 'true'
+      shell: cmd
+      run: |
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+
+    - name: Run quick smoke tests
+      if: steps.update_baseline.outputs.updates_available == 'true'
+      shell: cmd
+      run: |
+        cd build
+        ctest -C Release --output-on-failure --timeout 60
+
+    - name: Generate update report
+      if: steps.update_baseline.outputs.updates_available == 'true'
+      shell: pwsh
+      run: |
+        $currentBaseline = "${{ steps.current_baseline.outputs.current }}"
+        $latestBaseline = "${{ steps.update_baseline.outputs.latest }}"
+        
+        $report = @"
+        ## vcpkg Dependency Update Report
+        
+        ### Baseline Update
+        - **Previous baseline**: ``$currentBaseline``
+        - **New baseline**: ``$latestBaseline``
+        
+        ### Changes
+        View the vcpkg changelog: [Commits since last update](https://github.com/microsoft/vcpkg/compare/$currentBaseline...$latestBaseline)
+        
+        ### Testing Status
+        - ✅ Project builds successfully with updated dependencies
+        - ✅ Smoke tests passed
+        
+        ### Action Required
+        Please review the changes and run the full test suite before merging.
+        
+        ### Dependencies in vcpkg.json
+        ``````json
+        $(Get-Content vcpkg.json -Raw)
+        ``````
+        
+        ---
+        *Automated by dependency-updates workflow*
+        "@
+        
+        $report | Out-File -FilePath update_report.md -Encoding utf8
+
+    - name: Create Pull Request
+      if: steps.update_baseline.outputs.updates_available == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore(deps): update vcpkg baseline and dependencies'
+        title: '🔄 Update vcpkg Dependencies'
+        body-path: update_report.md
+        branch: deps/vcpkg-update
+        delete-branch: true
+        labels: |
+          dependencies
+          automated
+        assignees: ${{ github.repository_owner }}
+
+  check-dependency-versions:
+    name: Check Individual Package Versions
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: List installed versions
+      shell: pwsh
+      run: |
+        # Install dependencies to check versions
+        $vcpkgRoot = $env:VCPKG_ROOT
+        if (-not $vcpkgRoot) {
+          $vcpkgRoot = "C:\vcpkg"
+        }
+        
+        $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
+        
+        echo "## Current Dependency Versions" | Out-File -FilePath dependency_versions.md
+        echo "" | Out-File -FilePath dependency_versions.md -Append
+        echo "| Package | Version | Description |" | Out-File -FilePath dependency_versions.md -Append
+        echo "|---------|---------|-------------|" | Out-File -FilePath dependency_versions.md -Append
+        
+        # Parse vcpkg.json for dependencies
+        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+        foreach ($dep in $vcpkgJson.dependencies) {
+          $depName = if ($dep -is [string]) { $dep } else { $dep.name }
+          $info = & $vcpkgExe search $depName 2>&1 | Select-Object -First 1
+          echo "| $depName | $info | - |" | Out-File -FilePath dependency_versions.md -Append
+        }
+
+    - name: Upload version report
+      uses: actions/upload-artifact@v3
+      with:
+        name: dependency-versions
+        path: dependency_versions.md
+
+  security-audit:
+    name: Security Audit
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check for known vulnerabilities
+      shell: pwsh
+      run: |
+        echo "Checking for known security issues..."
+        # This is a placeholder - you would integrate with security scanning tools
+        # For example, you could use vcpkg's built-in checks or external tools
+        echo "No automated security scanning configured yet." > security_report.txt
+        echo "Consider integrating:" >> security_report.txt
+        echo "  - Snyk" >> security_report.txt
+        echo "  - GitHub Advanced Security" >> security_report.txt
+        echo "  - OWASP Dependency Check" >> security_report.txt
+
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-audit
+        path: security_report.txt

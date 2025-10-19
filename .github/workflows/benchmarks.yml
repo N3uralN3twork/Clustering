@@ -1,0 +1,538 @@
+name: Performance Benchmarks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday at midnight
+  workflow_dispatch:      # Allow manual trigger
+    inputs:
+      dataset_size:
+        description: 'Dataset size to benchmark'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - small
+          - medium
+          - large
+          - all
+
+env:
+  VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
+
+jobs:
+  benchmark-suite:
+    name: Run Benchmark Suite (${{ matrix.config.name }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Small (1000 obs, 5 vars)"
+            n_obs: 1000
+            n_vars: 5
+            k_min: 2
+            k_max: 7
+            repetitions: 10
+            # Python baseline: ~18 seconds, ~63 MB
+            baseline_time_ms: 18000
+            baseline_memory_mb: 63
+          
+          - name: "Medium (5000 obs, 5 vars)"
+            n_obs: 5000
+            n_vars: 5
+            k_min: 2
+            k_max: 7
+            repetitions: 5
+            # Python baseline: ~5.23 minutes, ~2643 MB
+            baseline_time_ms: 313800
+            baseline_memory_mb: 2643
+          
+          - name: "Large (10000 obs, 10 vars)"
+            n_obs: 10000
+            n_vars: 10
+            k_min: 2
+            k_max: 7
+            repetitions: 3
+            # Python baseline: ~8-18 minutes, ~3000-8000 MB
+            baseline_time_ms: 600000
+            baseline_memory_mb: 5000
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for comparing with base branch
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
+
+    - name: Export GitHub Actions cache
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Configure with optimizations
+      shell: cmd
+      run: |
+        cmake -B build -S . ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DCMAKE_CXX_FLAGS="/O2 /arch:AVX2 /fp:fast" ^
+          -DBUILD_BENCHMARKS=ON ^
+          -DBUILD_TESTS=OFF
+
+    - name: Build benchmarks
+      shell: cmd
+      run: |
+        cmake --build build --config Release -j %NUMBER_OF_PROCESSORS%
+
+    - name: Run benchmarks
+      shell: cmd
+      run: |
+        cd build\Release
+        quinncluster_benchmarks.exe ^
+          --benchmark_format=json ^
+          --benchmark_out=..\..\benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json ^
+          --benchmark_repetitions=${{ matrix.config.repetitions }} ^
+          --benchmark_min_time=1.0 ^
+          --benchmark_filter=".*/${{ matrix.config.n_obs }}/${{ matrix.config.n_vars }}/.*"
+
+    - name: Analyze results against baseline
+      shell: pwsh
+      run: |
+        $results = Get-Content "benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json" | ConvertFrom-Json
+        
+        # Extract average time from results
+        $benchmarks = $results.benchmarks | Where-Object { $_.aggregate_name -eq "mean" }
+        
+        $report = @"
+        # Benchmark Results: ${{ matrix.config.name }}
+        
+        ## Configuration
+        - **Observations**: ${{ matrix.config.n_obs }}
+        - **Variables**: ${{ matrix.config.n_vars }}
+        - **K Range**: [${{ matrix.config.k_min }}, ${{ matrix.config.k_max }}]
+        - **Repetitions**: ${{ matrix.config.repetitions }}
+        
+        ## Performance vs Python Baseline
+        
+        | Metric | C++ (Current) | Python (Baseline) | Improvement |
+        |--------|---------------|-------------------|-------------|
+        "@
+        
+        $report | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8
+        
+        foreach ($bench in $benchmarks) {
+          $benchName = $bench.name
+          $cppTimeMs = $bench.real_time
+          $baselineMs = ${{ matrix.config.baseline_time_ms }}
+          
+          $improvement = [math]::Round(($baselineMs / $cppTimeMs), 2)
+          $cppTimeSec = [math]::Round(($cppTimeMs / 1000), 2)
+          $baselineTimeSec = [math]::Round(($baselineMs / 1000), 2)
+          
+          $row = "| $benchName | ${cppTimeSec}s | ${baselineTimeSec}s | ${improvement}x faster |"
+          $row | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8 -Append
+          
+          # Alert if slower than Python baseline
+          if ($cppTimeMs -gt $baselineMs) {
+            Write-Host "::warning::Benchmark $benchName is slower than Python baseline!"
+          }
+          
+          # Alert if not at least 2x faster
+          if ($improvement -lt 2.0) {
+            Write-Host "::warning::Benchmark $benchName is less than 2x faster than Python (${improvement}x)"
+          }
+        }
+        
+        # Add memory usage section
+        $memoryReport = @"
+        
+        ## Memory Usage
+        - **Python Baseline**: ${{ matrix.config.baseline_memory_mb }} MB
+        - **Expected C++ Improvement**: 2-3x more efficient
+        - **C++ Target**: < $(([math]::Round(${{ matrix.config.baseline_memory_mb }} / 2, 0))) MB
+        
+        > Note: Memory measurements require additional instrumentation
+        "@
+        
+        $memoryReport | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8 -Append
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results-${{ matrix.config.n_obs }}-${{ matrix.config.n_vars }}
+        path: |
+          benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json
+          benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md
+
+    - name: Store benchmark for comparison
+      if: github.ref == 'refs/heads/main'
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        tool: 'googlecpp'
+        output-file-path: benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        alert-threshold: '120%'
+        comment-on-alert: true
+        fail-on-alert: false
+        benchmark-data-dir-path: "benchmarks/${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}"
+
+  algorithm-comparison:
+    name: Algorithm Performance Comparison
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Configure and Build
+      shell: cmd
+      run: |
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+        cmake --build build --config Release
+
+    - name: Run algorithm comparison
+      shell: cmd
+      run: |
+        cd build\Release
+        REM Benchmark each algorithm separately
+        FOR %%A IN (kmeans hierarchical dbscan spectral) DO (
+          echo Benchmarking %%A...
+          quinncluster_benchmarks.exe ^
+            --benchmark_format=json ^
+            --benchmark_out=..\..\benchmark_%%A.json ^
+            --benchmark_filter="%%A.*"
+        )
+
+    - name: Generate comparison report
+      shell: pwsh
+      run: |
+        $algorithms = @("kmeans", "hierarchical", "dbscan", "spectral")
+        
+        $report = @"
+        # Algorithm Performance Comparison
+        
+        ## Time Complexity Analysis
+        
+        | Algorithm | Small (1k) | Medium (5k) | Large (10k) | Scaling |
+        |-----------|------------|-------------|-------------|---------|
+        "@
+        
+        $report | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8
+        
+        foreach ($algo in $algorithms) {
+          if (Test-Path "benchmark_$algo.json") {
+            $results = Get-Content "benchmark_$algo.json" | ConvertFrom-Json
+            $meanBench = $results.benchmarks | Where-Object { $_.aggregate_name -eq "mean" }
+            
+            if ($meanBench) {
+              $times = @{}
+              foreach ($bench in $meanBench) {
+                if ($bench.name -match "/(\d+)/") {
+                  $size = $matches[1]
+                  $times[$size] = [math]::Round(($bench.real_time / 1000), 2)
+                }
+              }
+              
+              $small = if ($times["1000"]) { "$($times['1000'])s" } else { "N/A" }
+              $medium = if ($times["5000"]) { "$($times['5000'])s" } else { "N/A" }
+              $large = if ($times["10000"]) { "$($times['10000'])s" } else { "N/A" }
+              
+              # Calculate scaling factor
+              $scaling = "N/A"
+              if ($times["1000"] -and $times["10000"]) {
+                $factor = [math]::Round(($times["10000"] / $times["1000"]), 1)
+                $scaling = "${factor}x"
+              }
+              
+              $row = "| $algo | $small | $medium | $large | $scaling |"
+              $row | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
+            }
+          }
+        }
+
+    - name: Upload algorithm comparison
+      uses: actions/upload-artifact@v3
+      with:
+        name: algorithm-comparison
+        path: |
+          benchmark_*.json
+          algorithm_comparison.md
+
+  metrics-benchmark:
+    name: Metrics Performance Test
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Configure and Build
+      shell: cmd
+      run: |
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+        cmake --build build --config Release
+
+    - name: Benchmark internal metrics
+      shell: cmd
+      run: |
+        cd build\Release
+        quinncluster_benchmarks.exe ^
+          --benchmark_format=json ^
+          --benchmark_out=..\..\metrics_internal.json ^
+          --benchmark_filter="InternalMetrics.*"
+
+    - name: Benchmark external metrics
+      shell: cmd
+      run: |
+        cd build\Release
+        quinncluster_benchmarks.exe ^
+          --benchmark_format=json ^
+          --benchmark_out=..\..\metrics_external.json ^
+          --benchmark_filter="ExternalMetrics.*"
+
+    - name: Generate metrics report
+      shell: pwsh
+      run: |
+        $report = @"
+        # Clustering Metrics Performance
+        
+        ## Internal Validation Indices
+        
+        Based on Python baseline (10k obs, fast indices):
+        - Python: ~18 minutes for all fast indices
+        - Target C++: < 2 minutes (10x improvement)
+        
+        | Metric | Time (ms) | Target | Status |
+        |--------|-----------|--------|--------|
+        "@
+        
+        $report | Out-File -FilePath "metrics_report.md" -Encoding utf8
+        
+        if (Test-Path "metrics_internal.json") {
+          $results = Get-Content "metrics_internal.json" | ConvertFrom-Json
+          $meanBench = $results.benchmarks | Where-Object { $_.aggregate_name -eq "mean" }
+          
+          foreach ($bench in $meanBench) {
+            $name = $bench.name -replace "InternalMetrics/", ""
+            $timeMs = [math]::Round($bench.real_time, 2)
+            $target = 1000  # Target: < 1 second per metric
+            $status = if ($timeMs -lt $target) { "✅ Fast" } else { "⚠️ Slow" }
+            
+            $row = "| $name | ${timeMs}ms | ${target}ms | $status |"
+            $row | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+          }
+        }
+        
+        "`n## External Validation Indices`n" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+        
+        if (Test-Path "metrics_external.json") {
+          $results = Get-Content "metrics_external.json" | ConvertFrom-Json
+          $meanBench = $results.benchmarks | Where-Object { $_.aggregate_name -eq "mean" }
+          
+          "| Metric | Time (ms) | Target | Status |" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+          "|--------|-----------|--------|--------|" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+          
+          foreach ($bench in $meanBench) {
+            $name = $bench.name -replace "ExternalMetrics/", ""
+            $timeMs = [math]::Round($bench.real_time, 2)
+            $target = 500
+            $status = if ($timeMs -lt $target) { "✅ Fast" } else { "⚠️ Slow" }
+            
+            $row = "| $name | ${timeMs}ms | ${target}ms | $status |"
+            $row | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+          }
+        }
+
+    - name: Upload metrics results
+      uses: actions/upload-artifact@v3
+      with:
+        name: metrics-benchmarks
+        path: |
+          metrics_*.json
+          metrics_report.md
+
+  pr-comparison:
+    name: Compare with Base Branch
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Build and benchmark PR
+      shell: cmd
+      run: |
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+        cmake --build build --config Release
+        cd build\Release
+        quinncluster_benchmarks.exe ^
+          --benchmark_format=json ^
+          --benchmark_out=..\..\pr_results.json
+
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.base_ref }}
+        path: base
+
+    - name: Build and benchmark base
+      shell: cmd
+      run: |
+        cd base
+        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+        cmake --build build --config Release
+        cd build\Release
+        quinncluster_benchmarks.exe ^
+          --benchmark_format=json ^
+          --benchmark_out=..\..\..\base_results.json
+
+    - name: Compare results
+      shell: pwsh
+      run: |
+        # This is a simplified comparison - you would use a more sophisticated tool
+        $prResults = Get-Content "pr_results.json" | ConvertFrom-Json
+        $baseResults = Get-Content "base_results.json" | ConvertFrom-Json
+        
+        $report = @"
+        # 📊 Performance Comparison: PR vs Base
+        
+        ## Summary
+        
+        | Benchmark | Base | PR | Change | Status |
+        |-----------|------|----|----- ---|--------|
+        "@
+        
+        $report | Out-File -FilePath "comparison.md" -Encoding utf8
+        
+        $prBenchmarks = $prResults.benchmarks | Where-Object { $_.aggregate_name -eq "mean" }
+        
+        foreach ($prBench in $prBenchmarks) {
+          $name = $prBench.name
+          $baseBench = $baseResults.benchmarks | Where-Object { $_.name -eq $name -and $_.aggregate_name -eq "mean" }
+          
+          if ($baseBench) {
+            $baseTime = [math]::Round($baseBench.real_time, 2)
+            $prTime = [math]::Round($prBench.real_time, 2)
+            $change = [math]::Round((($prTime - $baseTime) / $baseTime) * 100, 2)
+            
+            $status = if ($change -lt -5) {
+              "✅ Faster"
+            } elseif ($change -gt 20) {
+              "❌ Regression"
+            } else {
+              "➖ Similar"
+            }
+            
+            $changeStr = if ($change -gt 0) { "+$change%" } else { "$change%" }
+            
+            $row = "| $name | ${baseTime}ms | ${prTime}ms | $changeStr | $status |"
+            $row | Out-File -FilePath "comparison.md" -Encoding utf8 -Append
+            
+            # Alert on significant regressions
+            if ($change -gt 20) {
+              Write-Host "::warning::Performance regression detected in $name : $changeStr"
+            }
+          }
+        }
+
+    - name: Comment PR with results
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const comparison = fs.readFileSync('comparison.md', 'utf8');
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comparison
+          });
+
+    - name: Upload comparison
+      uses: actions/upload-artifact@v3
+      with:
+        name: pr-comparison
+        path: |
+          pr_results.json
+          base_results.json
+          comparison.md
+
+  performance-summary:
+    name: Generate Performance Summary
+    runs-on: windows-latest
+    needs: [benchmark-suite, algorithm-comparison, metrics-benchmark]
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate comprehensive summary
+      shell: pwsh
+      run: |
+        $summary = @"
+        # 📈 QuinnCluster Performance Summary
+        
+        ## Overall Results
+        
+        ### Benchmark Suite
+        Job Status: ${{ needs.benchmark-suite.result }}
+        
+        ### Algorithm Comparison
+        Job Status: ${{ needs.algorithm-comparison.result }}
+        
+        ### Metrics Performance
+        Job Status: ${{ needs.metrics-benchmark.result }}
+        
+        ## Key Performance Indicators
+        
+        ### C++ vs Python Baseline
+        
+        | Dataset Size | Python Time | C++ Target | Expected Improvement |
+        |--------------|-------------|------------|---------------------|
+        | 1k × 5 | 18s | <2s | 9x faster |
+        | 5k × 5 | 5.2min | <30s | 10x faster |
+        | 10k × 10 | 8-18min | <1min | 8-18x faster |
+        
+        ### Memory Efficiency Target
+        - Small datasets: < 30 MB (Python: 63 MB)
+        - Medium datasets: < 1 GB (Python: 2.6 GB)
+        - Large datasets: < 2.5 GB (Python: 5-8 GB)
+        
+        ## Notes
+        - All benchmarks run on GitHub Actions Windows runner
+        - Results include full pipeline: clustering + all fast metrics
+        - See individual artifacts for detailed breakdowns
+        
+        ---
+        *Generated by Performance Benchmarks workflow*
+        "@
+        
+        $summary | Out-File -FilePath "performance_summary.md" -Encoding utf8
+
+    - name: Upload summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-summary
+        path: performance_summary.md
