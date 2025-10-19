@@ -1,0 +1,8 @@
+//
+// Created by miqui on 10/19/2025.
+//
+
+#ifndef CLUSTERING_DISTANCE_HPP
+#define CLUSTERING_DISTANCE_HPP
+
+#endif //CLUSTERING_DISTANCE_HPP

@@ -1,0 +1,6 @@
+{
+  "name" : "clustering",
+  "version" : "1.0.0",
+  "description" : "Clustering Metrics",
+  "dependencies" : ["eigen3", "fmt", "boost-math", "benchmark"]
+}
