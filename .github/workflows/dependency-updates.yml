@@ -220,7 +220,7 @@ jobs:
         fi
 
     - name: Upload version report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: dependency-versions
         path: dependency_versions.md
@@ -290,7 +290,7 @@ jobs:
         $report | Out-File -FilePath mingw_compatibility.md -Encoding utf8
 
     - name: Upload compatibility report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: mingw-compatibility
         path: mingw_compatibility.md
@@ -336,7 +336,7 @@ jobs:
         echo "  - -Wformat -Wformat-security" >> security_report.txt
 
     - name: Upload security report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: security-audit
         path: security_report.txt

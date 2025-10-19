@@ -85,7 +85,7 @@ jobs:
 
     - name: Upload ASan results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: asan-results
         path: asan_results.txt
@@ -150,7 +150,7 @@ jobs:
 
     - name: Upload TSan results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: tsan-results
         path: tsan_results.txt
@@ -238,7 +238,7 @@ jobs:
 
     - name: Upload CppCheck results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cppcheck-results
         path: |
@@ -318,7 +318,7 @@ jobs:
 
     - name: Upload warning report
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: gcc-warnings
         path: |
@@ -388,7 +388,7 @@ jobs:
 
     - name: Upload leak detection results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: leak-detection-results
         path: leak_detection.txt
@@ -435,7 +435,7 @@ jobs:
         echo "See individual job artifacts for detailed reports." >> summary.md
 
     - name: Upload summary
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: memory-safety-summary
         path: summary.md

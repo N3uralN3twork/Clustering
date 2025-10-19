@@ -186,7 +186,7 @@ jobs:
         $memoryReport | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8 -Append
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: benchmark-results-${{ matrix.config.n_obs }}-${{ matrix.config.n_vars }}
         path: |
@@ -305,7 +305,7 @@ jobs:
         "- **Optimization**: -O3 -march=native" | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
 
     - name: Upload algorithm comparison
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: algorithm-comparison
         path: |
@@ -421,7 +421,7 @@ jobs:
         "- **Optimization**: -O3 -march=native" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
 
     - name: Upload metrics results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: metrics-benchmarks
         path: |
@@ -555,7 +555,7 @@ jobs:
           });
 
     - name: Upload comparison
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: pr-comparison
         path: |
@@ -625,7 +625,7 @@ jobs:
         $summary | Out-File -FilePath "performance_summary.md" -Encoding utf8
 
     - name: Upload summary
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-summary
         path: performance_summary.md
