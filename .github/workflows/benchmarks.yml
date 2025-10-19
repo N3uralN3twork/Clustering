@@ -67,6 +67,16 @@ jobs:
       with:
         fetch-depth: 0  # Needed for comparing with base branch
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
       with:
@@ -80,28 +90,30 @@ jobs:
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
     - name: Configure with optimizations
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DCMAKE_CXX_FLAGS="/O2 /arch:AVX2 /fp:fast" ^
-          -DBUILD_BENCHMARKS=ON ^
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -mtune=native -ffast-math -std=c++23" \
+          -DBUILD_BENCHMARKS=ON \
           -DBUILD_TESTS=OFF
 
     - name: Build benchmarks
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake --build build --config Release -j %NUMBER_OF_PROCESSORS%
+        cmake --build build -j $(nproc)
 
     - name: Run benchmarks
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cd build\Release
-        quinncluster_benchmarks.exe ^
-          --benchmark_format=json ^
-          --benchmark_out=..\..\benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json ^
-          --benchmark_repetitions=${{ matrix.config.repetitions }} ^
-          --benchmark_min_time=1.0 ^
+        cd build
+        ./quinncluster_benchmarks \
+          --benchmark_format=json \
+          --benchmark_out=../benchmark_results_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.json \
+          --benchmark_repetitions=${{ matrix.config.repetitions }} \
+          --benchmark_min_time=1.0 \
           --benchmark_filter=".*/${{ matrix.config.n_obs }}/${{ matrix.config.n_vars }}/.*"
 
     - name: Analyze results against baseline
@@ -120,11 +132,14 @@ jobs:
         - **Variables**: ${{ matrix.config.n_vars }}
         - **K Range**: [${{ matrix.config.k_min }}, ${{ matrix.config.k_max }}]
         - **Repetitions**: ${{ matrix.config.repetitions }}
+        - **Compiler**: MinGW GCC
+        - **C++ Standard**: C++23
+        - **Optimization Flags**: -O3 -march=native -mtune=native -ffast-math
         
         ## Performance vs Python Baseline
         
-        | Metric | C++ (Current) | Python (Baseline) | Improvement |
-        |--------|---------------|-------------------|-------------|
+        | Metric | C++ (MinGW) | Python (Baseline) | Improvement |
+        |--------|-------------|-------------------|-------------|
         "@
         
         $report | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8
@@ -161,6 +176,11 @@ jobs:
         - **C++ Target**: < $(([math]::Round(${{ matrix.config.baseline_memory_mb }} / 2, 0))) MB
         
         > Note: Memory measurements require additional instrumentation
+        
+        ## Compiler Details
+        - **Toolchain**: MinGW-w64 GCC
+        - **Architecture**: x86_64
+        - **Build System**: CMake + Ninja
         "@
         
         $memoryReport | Out-File -FilePath "benchmark_report_${{ matrix.config.n_obs }}_${{ matrix.config.n_vars }}.md" -Encoding utf8 -Append
@@ -194,27 +214,42 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
     - name: Configure and Build
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
-        cmake --build build --config Release
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -std=c++23" \
+          -DBUILD_BENCHMARKS=ON
+        cmake --build build -j $(nproc)
 
     - name: Run algorithm comparison
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cd build\Release
-        REM Benchmark each algorithm separately
-        FOR %%A IN (kmeans hierarchical dbscan spectral) DO (
-          echo Benchmarking %%A...
-          quinncluster_benchmarks.exe ^
-            --benchmark_format=json ^
-            --benchmark_out=..\..\benchmark_%%A.json ^
-            --benchmark_filter="%%A.*"
-        )
+        cd build
+        # Benchmark each algorithm separately
+        for algo in kmeans hierarchical dbscan spectral; do
+          echo "Benchmarking $algo..."
+          ./quinncluster_benchmarks \
+            --benchmark_format=json \
+            --benchmark_out=../benchmark_$algo.json \
+            --benchmark_filter="$algo.*"
+        done
 
     - name: Generate comparison report
       shell: pwsh
@@ -222,7 +257,7 @@ jobs:
         $algorithms = @("kmeans", "hierarchical", "dbscan", "spectral")
         
         $report = @"
-        # Algorithm Performance Comparison
+        # Algorithm Performance Comparison (MinGW + C++23)
         
         ## Time Complexity Analysis
         
@@ -262,6 +297,12 @@ jobs:
             }
           }
         }
+        
+        # Add compiler information
+        "`n## Build Configuration" | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
+        "- **Compiler**: MinGW GCC" | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
+        "- **C++ Standard**: C++23" | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
+        "- **Optimization**: -O3 -march=native" | Out-File -FilePath "algorithm_comparison.md" -Encoding utf8 -Append
 
     - name: Upload algorithm comparison
       uses: actions/upload-artifact@v3
@@ -279,38 +320,53 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
     - name: Configure and Build
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
-        cmake --build build --config Release
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -std=c++23" \
+          -DBUILD_BENCHMARKS=ON
+        cmake --build build -j $(nproc)
 
     - name: Benchmark internal metrics
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cd build\Release
-        quinncluster_benchmarks.exe ^
-          --benchmark_format=json ^
-          --benchmark_out=..\..\metrics_internal.json ^
+        cd build
+        ./quinncluster_benchmarks \
+          --benchmark_format=json \
+          --benchmark_out=../metrics_internal.json \
           --benchmark_filter="InternalMetrics.*"
 
     - name: Benchmark external metrics
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cd build\Release
-        quinncluster_benchmarks.exe ^
-          --benchmark_format=json ^
-          --benchmark_out=..\..\metrics_external.json ^
+        cd build
+        ./quinncluster_benchmarks \
+          --benchmark_format=json \
+          --benchmark_out=../metrics_external.json \
           --benchmark_filter="ExternalMetrics.*"
 
     - name: Generate metrics report
       shell: pwsh
       run: |
         $report = @"
-        # Clustering Metrics Performance
+        # Clustering Metrics Performance (MinGW + C++23)
         
         ## Internal Validation Indices
         
@@ -358,6 +414,11 @@ jobs:
             $row | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
           }
         }
+        
+        "`n## Compiler Configuration" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+        "- **Compiler**: MinGW GCC" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+        "- **C++ Standard**: C++23" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
+        "- **Optimization**: -O3 -march=native" | Out-File -FilePath "metrics_report.md" -Encoding utf8 -Append
 
     - name: Upload metrics results
       uses: actions/upload-artifact@v3
@@ -376,18 +437,33 @@ jobs:
     - name: Checkout PR branch
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
     - name: Build and benchmark PR
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
-        cmake --build build --config Release
-        cd build\Release
-        quinncluster_benchmarks.exe ^
-          --benchmark_format=json ^
-          --benchmark_out=..\..\pr_results.json
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -std=c++23" \
+          -DBUILD_BENCHMARKS=ON
+        cmake --build build -j $(nproc)
+        cd build
+        ./quinncluster_benchmarks \
+          --benchmark_format=json \
+          --benchmark_out=../pr_results.json
 
     - name: Checkout base branch
       uses: actions/checkout@v4
@@ -396,25 +472,29 @@ jobs:
         path: base
 
     - name: Build and benchmark base
-      shell: cmd
+      shell: msys2 {0}
       run: |
         cd base
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
-        cmake --build build --config Release
-        cd build\Release
-        quinncluster_benchmarks.exe ^
-          --benchmark_format=json ^
-          --benchmark_out=..\..\..\base_results.json
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -std=c++23" \
+          -DBUILD_BENCHMARKS=ON
+        cmake --build build -j $(nproc)
+        cd build
+        ./quinncluster_benchmarks \
+          --benchmark_format=json \
+          --benchmark_out=../../base_results.json
 
     - name: Compare results
       shell: pwsh
       run: |
-        # This is a simplified comparison - you would use a more sophisticated tool
         $prResults = Get-Content "pr_results.json" | ConvertFrom-Json
         $baseResults = Get-Content "base_results.json" | ConvertFrom-Json
         
         $report = @"
-        # 📊 Performance Comparison: PR vs Base
+        # 📊 Performance Comparison: PR vs Base (MinGW + C++23)
         
         ## Summary
         
@@ -454,6 +534,11 @@ jobs:
             }
           }
         }
+        
+        "`n## Build Configuration" | Out-File -FilePath "comparison.md" -Encoding utf8 -Append
+        "- **Compiler**: MinGW GCC" | Out-File -FilePath "comparison.md" -Encoding utf8 -Append
+        "- **C++ Standard**: C++23" | Out-File -FilePath "comparison.md" -Encoding utf8 -Append
+        "- **Optimization**: -O3 -march=native" | Out-File -FilePath "comparison.md" -Encoding utf8 -Append
 
     - name: Comment PR with results
       uses: actions/github-script@v7
@@ -492,7 +577,7 @@ jobs:
       shell: pwsh
       run: |
         $summary = @"
-        # 📈 QuinnCluster Performance Summary
+        # 📈 QuinnCluster Performance Summary (MinGW + C++23)
         
         ## Overall Results
         
@@ -507,7 +592,7 @@ jobs:
         
         ## Key Performance Indicators
         
-        ### C++ vs Python Baseline
+        ### C++ (MinGW) vs Python Baseline
         
         | Dataset Size | Python Time | C++ Target | Expected Improvement |
         |--------------|-------------|------------|---------------------|
@@ -520,9 +605,17 @@ jobs:
         - Medium datasets: < 1 GB (Python: 2.6 GB)
         - Large datasets: < 2.5 GB (Python: 5-8 GB)
         
+        ## Build Configuration
+        - **Compiler**: MinGW-w64 GCC
+        - **C++ Standard**: C++23
+        - **Build System**: CMake + Ninja
+        - **Optimization Flags**: -O3 -march=native -mtune=native -ffast-math
+        - **Platform**: Windows (GitHub Actions)
+        
         ## Notes
-        - All benchmarks run on GitHub Actions Windows runner
+        - All benchmarks run on GitHub Actions Windows runner with MinGW
         - Results include full pipeline: clustering + all fast metrics
+        - C++23 features enabled for modern code optimizations
         - See individual artifacts for detailed breakdowns
         
         ---

@@ -12,13 +12,24 @@ env:
   VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
 
 jobs:
-  msvc-address-sanitizer:
-    name: MSVC AddressSanitizer
+  mingw-address-sanitizer:
+    name: MinGW AddressSanitizer
     runs-on: windows-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+          mingw-w64-x86_64-gdb
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
@@ -33,38 +44,42 @@ jobs:
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
     - name: Configure with AddressSanitizer
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . ^
-          -DCMAKE_BUILD_TYPE=Debug ^
-          -DCMAKE_CXX_FLAGS="/fsanitize=address /Zi" ^
-          -DBUILD_TESTS=ON ^
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g -std=c++23" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -fsanitize=undefined" \
+          -DBUILD_TESTS=ON \
           -DBUILD_BENCHMARKS=OFF
 
     - name: Build with ASan
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake --build build --config Debug -j %NUMBER_OF_PROCESSORS%
+        cmake --build build -j $(nproc)
 
     - name: Run tests with AddressSanitizer
-      shell: cmd
+      shell: msys2 {0}
       continue-on-error: true
       run: |
         cd build
-        set ASAN_OPTIONS=windows_hook_rtl_allocators=true:detect_leaks=0:halt_on_error=1
-        ctest -C Debug --output-on-failure --timeout 300 > ..\asan_results.txt 2>&1
+        export ASAN_OPTIONS="halt_on_error=1:detect_leaks=1:check_initialization_order=1"
+        export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+        ctest --output-on-failure --timeout 300 > ../asan_results.txt 2>&1
 
     - name: Check for ASan violations
       shell: pwsh
       run: |
         if (Test-Path asan_results.txt) {
           $content = Get-Content asan_results.txt -Raw
-          if ($content -match "ERROR: AddressSanitizer") {
-            Write-Host "::error::AddressSanitizer detected memory errors!"
+          if ($content -match "ERROR: (AddressSanitizer|UndefinedBehaviorSanitizer)") {
+            Write-Host "::error::Sanitizer detected memory/undefined behavior errors!"
             Get-Content asan_results.txt
             exit 1
           } else {
-            Write-Host "✅ No AddressSanitizer errors detected"
+            Write-Host "✅ No sanitizer errors detected"
           }
         }
 
@@ -75,165 +90,117 @@ jobs:
         name: asan-results
         path: asan_results.txt
 
-  clang-sanitizers:
-    name: Clang-cl Sanitizers
+  mingw-thread-sanitizer:
+    name: MinGW ThreadSanitizer
     runs-on: windows-latest
-    strategy:
-      matrix:
-        sanitizer: [address]  # More sanitizers can be added as supported
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
-    - name: Install LLVM/Clang
-      shell: pwsh
+    - name: Configure with ThreadSanitizer
+      shell: msys2 {0}
       run: |
-        choco install llvm -y
-        # Add LLVM to PATH
-        $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
-        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Configure with Clang-cl and ${{ matrix.sanitizer }}
-      shell: cmd
-      run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-        cmake -B build -S . ^
-          -G "Ninja" ^
-          -DCMAKE_C_COMPILER=clang-cl ^
-          -DCMAKE_CXX_COMPILER=clang-cl ^
-          -DCMAKE_BUILD_TYPE=Debug ^
-          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer -g" ^
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -std=c++23" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      shell: cmd
-      run: cmake --build build
+      shell: msys2 {0}
+      run: cmake --build build -j $(nproc)
 
-    - name: Run tests
-      shell: cmd
+    - name: Run tests with ThreadSanitizer
+      shell: msys2 {0}
       continue-on-error: true
       run: |
         cd build
-        ctest --output-on-failure > ..\clang_${{ matrix.sanitizer }}_results.txt 2>&1
+        export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1"
+        ctest --output-on-failure > ../tsan_results.txt 2>&1
 
-    - name: Upload results
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: clang-${{ matrix.sanitizer }}-results
-        path: clang_${{ matrix.sanitizer }}_results.txt
-
-  dr-memory:
-    name: Dr. Memory Analysis
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-
-    - name: Install Dr. Memory
+    - name: Check for TSan violations
       shell: pwsh
       run: |
-        # Download and install Dr. Memory
-        $drmemoryUrl = "https://github.com/DynamoRIO/drmemory/releases/download/release_2.6.0/DrMemory-Windows-2.6.0.zip"
-        Invoke-WebRequest -Uri $drmemoryUrl -OutFile drmemory.zip
-        Expand-Archive drmemory.zip -DestinationPath C:\
-        echo "C:\DrMemory-Windows-2.6.0\bin64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Configure and Build
-      shell: cmd
-      run: |
-        cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
-        cmake --build build --config Debug
-
-    - name: Run Dr. Memory
-      shell: cmd
-      continue-on-error: true
-      run: |
-        cd build
-        FOR %%G IN (Debug\*test*.exe) DO (
-          echo Running Dr. Memory on %%G
-          drmemory.exe -batch -light -- %%G
-        )
-
-    - name: Collect Dr. Memory results
-      shell: pwsh
-      run: |
-        # Dr. Memory creates results in DrMemory-* directories
-        $results = Get-ChildItem -Path . -Directory -Filter "DrMemory-*" -Recurse
-        if ($results) {
-          New-Item -ItemType Directory -Force -Path drmemory_reports
-          foreach ($result in $results) {
-            Copy-Item -Path "$($result.FullName)\*" -Destination drmemory_reports -Recurse -Force
-          }
-          
-          # Check for errors
-          $errorFiles = Get-ChildItem -Path drmemory_reports -Filter "results.txt" -Recurse
-          $hasErrors = $false
-          foreach ($file in $errorFiles) {
-            $content = Get-Content $file.FullName -Raw
-            if ($content -match "ERRORS FOUND:|LEAK") {
-              $hasErrors = $true
-              Write-Host "::error::Dr. Memory found issues in $($file.FullName)"
-            }
-          }
-          
-          if ($hasErrors) {
+        if (Test-Path tsan_results.txt) {
+          $content = Get-Content tsan_results.txt -Raw
+          if ($content -match "WARNING: ThreadSanitizer") {
+            Write-Host "::error::ThreadSanitizer detected data races!"
+            Get-Content tsan_results.txt
             exit 1
+          } else {
+            Write-Host "✅ No ThreadSanitizer errors detected"
           }
         }
 
-    - name: Upload Dr. Memory results
+    - name: Upload TSan results
       if: always()
       uses: actions/upload-artifact@v3
       with:
-        name: drmemory-results
-        path: drmemory_reports/
+        name: tsan-results
+        path: tsan_results.txt
 
   static-analysis:
-    name: Static Analysis (PVS-Studio & CppCheck)
+    name: Static Analysis (CppCheck)
     runs-on: windows-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+          mingw-w64-x86_64-cppcheck
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
-    - name: Install CppCheck
-      shell: pwsh
-      run: |
-        choco install cppcheck -y
-
     - name: Configure project
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . ^
-          -DCMAKE_BUILD_TYPE=Debug ^
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DBUILD_TESTS=ON
 
     - name: Run CppCheck
-      shell: cmd
+      shell: msys2 {0}
       continue-on-error: true
       run: |
-        cppcheck --project=build/compile_commands.json ^
-          --enable=all ^
-          --inconclusive ^
-          --xml ^
-          --xml-version=2 ^
-          --suppress=missingIncludeSystem ^
-          --suppress=unmatchedSuppression ^
-          -I include ^
-          src/ ^
+        cppcheck --project=build/compile_commands.json \
+          --enable=all \
+          --inconclusive \
+          --std=c++23 \
+          --xml \
+          --xml-version=2 \
+          --suppress=missingIncludeSystem \
+          --suppress=unmatchedSuppression \
+          -I include \
+          src/ \
           2> cppcheck_report.xml
 
     - name: Convert CppCheck results to readable format
@@ -262,6 +229,10 @@ jobs:
             if ($criticalErrors) {
               Write-Host "::warning::CppCheck found $($criticalErrors.Count) critical issues"
             }
+          } else {
+            echo "# CppCheck Analysis Results" > cppcheck_report.md
+            echo "" >> cppcheck_report.md
+            echo "✅ No issues found" >> cppcheck_report.md
           }
         }
 
@@ -274,42 +245,139 @@ jobs:
           cppcheck_report.xml
           cppcheck_report.md
 
-  memory-leak-detection:
-    name: Memory Leak Detection
+  gcc-warnings:
+    name: GCC Warning Analysis (C++23)
     runs-on: windows-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+
+    - name: Configure with strict warnings
+      shell: msys2 {0}
+      run: |
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wnull-dereference -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wformat=2 -std=c++23" \
+          -DBUILD_TESTS=ON
+
+    - name: Build with strict warnings
+      shell: msys2 {0}
+      continue-on-error: true
+      run: |
+        cmake --build build -j $(nproc) 2> warnings.txt
+
+    - name: Analyze warnings
+      shell: pwsh
+      run: |
+        if (Test-Path warnings.txt) {
+          $content = Get-Content warnings.txt -Raw
+          if ($content) {
+            Write-Host "::warning::Build produced warnings"
+            Get-Content warnings.txt
+            
+            # Count warnings
+            $warningCount = ([regex]::Matches($content, "warning:")).Count
+            $errorCount = ([regex]::Matches($content, "error:")).Count
+            
+            echo "# GCC Warning Analysis" > warning_report.md
+            echo "" >> warning_report.md
+            echo "- **Warnings**: $warningCount" >> warning_report.md
+            echo "- **Errors**: $errorCount" >> warning_report.md
+            echo "" >> warning_report.md
+            echo "## Details" >> warning_report.md
+            echo '```' >> warning_report.md
+            Get-Content warnings.txt >> warning_report.md
+            echo '```' >> warning_report.md
+            
+            if ($errorCount -gt 0) {
+              exit 1
+            }
+          } else {
+            Write-Host "✅ No warnings detected"
+            echo "# GCC Warning Analysis" > warning_report.md
+            echo "" >> warning_report.md
+            echo "✅ No warnings or errors detected" >> warning_report.md
+          }
+        }
+
+    - name: Upload warning report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: gcc-warnings
+        path: |
+          warnings.txt
+          warning_report.md
+
+  memory-leak-valgrind:
+    name: Memory Leak Detection (Valgrind-like)
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
 
     - name: Configure with Debug info
-      shell: cmd
+      shell: msys2 {0}
       run: |
-        cmake -B build -S . ^
-          -DCMAKE_BUILD_TYPE=Debug ^
+        cmake -B build -S . \
+          -G "Ninja" \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_FLAGS="-g -O0 -std=c++23" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      shell: cmd
-      run: cmake --build build --config Debug
+      shell: msys2 {0}
+      run: cmake --build build -j $(nproc)
 
-    - name: Enable Windows Memory Leak Detection
-      shell: cmd
+    - name: Run tests with leak detection (via ASan)
+      shell: msys2 {0}
+      continue-on-error: true
       run: |
-        cd build\Debug
-        echo Running tests with Windows CRT leak detection...
-        set _NO_DEBUG_HEAP=1
-        ctest -C Debug --output-on-failure > ..\..\leak_detection.txt 2>&1
+        cd build
+        # Use ASan's leak detection as alternative to Valgrind on Windows
+        export ASAN_OPTIONS="detect_leaks=1:fast_unwind_on_malloc=0"
+        cmake -DCMAKE_CXX_FLAGS="-fsanitize=address -g -O0 -std=c++23" \
+              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" ..
+        cmake --build . -j $(nproc)
+        ctest --output-on-failure > ../leak_detection.txt 2>&1
 
     - name: Check for leaks
       shell: pwsh
       run: |
         if (Test-Path leak_detection.txt) {
           $content = Get-Content leak_detection.txt -Raw
-          if ($content -match "memory leak|Detected memory leaks") {
+          if ($content -match "memory leak|Direct leak|Indirect leak") {
             Write-Host "::error::Memory leaks detected!"
             Get-Content leak_detection.txt
             exit 1
@@ -328,7 +396,7 @@ jobs:
   summary:
     name: Memory Safety Summary
     runs-on: windows-latest
-    needs: [msvc-address-sanitizer, dr-memory, static-analysis, memory-leak-detection]
+    needs: [mingw-address-sanitizer, mingw-thread-sanitizer, static-analysis, gcc-warnings, memory-leak-valgrind]
     if: always()
     
     steps:
@@ -338,17 +406,18 @@ jobs:
     - name: Generate summary report
       shell: pwsh
       run: |
-        echo "# Memory Safety Analysis Summary" > summary.md
+        echo "# Memory Safety Analysis Summary (MinGW + C++23)" > summary.md
         echo "" >> summary.md
         echo "## Test Results" >> summary.md
         echo "" >> summary.md
         
         # Check each job result
         $jobs = @{
-          "MSVC AddressSanitizer" = "${{ needs.msvc-address-sanitizer.result }}"
-          "Dr. Memory" = "${{ needs.dr-memory.result }}"
+          "MinGW AddressSanitizer" = "${{ needs.mingw-address-sanitizer.result }}"
+          "MinGW ThreadSanitizer" = "${{ needs.mingw-thread-sanitizer.result }}"
           "Static Analysis" = "${{ needs.static-analysis.result }}"
-          "Memory Leak Detection" = "${{ needs.memory-leak-detection.result }}"
+          "GCC Warnings" = "${{ needs.gcc-warnings.result }}"
+          "Memory Leak Detection" = "${{ needs.memory-leak-valgrind.result }}"
         }
         
         foreach ($job in $jobs.GetEnumerator()) {
@@ -356,6 +425,11 @@ jobs:
           echo "- **$($job.Key)**: $status" >> summary.md
         }
         
+        echo "" >> summary.md
+        echo "## Compiler Information" >> summary.md
+        echo "- **Compiler**: MinGW GCC" >> summary.md
+        echo "- **C++ Standard**: C++23" >> summary.md
+        echo "- **Build System**: CMake + Ninja" >> summary.md
         echo "" >> summary.md
         echo "## Details" >> summary.md
         echo "See individual job artifacts for detailed reports." >> summary.md
