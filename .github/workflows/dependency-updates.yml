@@ -75,6 +75,7 @@ jobs:
       run: |
         cmake -B build -S . \
           -G "Ninja" \
+          -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystem/vcpkg.cmake" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_CXX_FLAGS="-std=c++23 -O2"
@@ -252,6 +253,7 @@ jobs:
         echo "Testing MinGW build with C++23..."
         cmake -B build -S . \
           -G "Ninja" \
+          -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystem/vcpkg.cmake" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_CXX_FLAGS="-std=c++23 -O2" \
