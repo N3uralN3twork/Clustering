@@ -5,7 +5,7 @@ project(Clustering VERSION 1.0.0 LANGUAGES CXX)
 # Build Options
 # ============================================================================
 option(BUILD_TESTS "Build unit tests" ON)
-option(BUILD_BENCHMARKS "Build performance benchmarks" ON)
+option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
 option(BUILD_EXAMPLES "Build example programs" OFF)
 
 # ============================================================================
@@ -51,6 +51,7 @@ endif()
 # linked by the main executable, tests, and benchmarks
 
 add_library(clustering_lib STATIC
+        src/dummy.cpp
         # Add your source files here as you create them
         # src/algorithms/kmeans.cpp
         # src/algorithms/hierarchical.cpp
