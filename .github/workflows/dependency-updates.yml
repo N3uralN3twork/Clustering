@@ -16,7 +16,7 @@ jobs:
   build-and-report:
     runs-on: windows-latest
 
-    # Ensure all commands run inside the MSYS2 MINGW64 shell so MinGW is on PATH
+    # Run commands inside MSYS2 MINGW64 so MinGW toolchain is on PATH
     defaults:
       run:
         shell: msys2 {0}
@@ -46,35 +46,46 @@ jobs:
           which make || true
 
       - name: Set up vcpkg (manifest mode)
+        # IMPORTANT: bootstrap the POSIX script so the toolchain remains POSIX-friendly
         run: |
           git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
           "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
-          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
+          # Normalize paths (both POSIX and Windows) to avoid the D;\ path glitch
+          VCPKG_ROOT_POSIX=$(cygpath -u "$GITHUB_WORKSPACE/vcpkg")
+          VCPKG_ROOT_WIN=$(cygpath -m "$GITHUB_WORKSPACE/vcpkg")
+          echo "VCPKG_ROOT=$VCPKG_ROOT_WIN" >> $GITHUB_ENV
+          echo "VCPKG_ROOT_POSIX=$VCPKG_ROOT_POSIX" >> $GITHUB_ENV
+          # Keep triplets consistent for host and target to avoid x64-windows auto-pick
+          echo "VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
+          echo "VCPKG_HOST_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
+          # Avoid downloading extra helpers that may flip shells; keep system binaries
+          echo "VCPKG_FORCE_SYSTEM_BINARIES=1" >> $GITHUB_ENV
+          # Enable manifest/versions features explicitly
+          echo "VCPKG_FEATURE_FLAGS=manifests,versions" >> $GITHUB_ENV
 
-      - name: Restore / install dependencies from manifest
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --triplet x64-mingw-dynamic
+      # NOTE: We intentionally DO NOT call `vcpkg install` here because under MSYS2 it can
+      # trigger a Windows-hosted compiler detection that mangles drive letters (D;\...).
+      # CMake + the vcpkg toolchain in manifest mode will resolve and build the dependencies.
 
       - name: Configure (CMake + MinGW Makefiles + vcpkg)
-        continue-on-error: true
         id: cmake_configure
         run: |
           cmake -S . -B build -G "MinGW Makefiles" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_POSIX/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SH=CMAKE_SH-NOTFOUND
+          echo "Selected C/CXX compilers:" && grep -E "^CMAKE_(C|CXX)_COMPILER:FILEPATH" build/CMakeCache.txt || true
 
       - name: Build
         if: steps.cmake_configure.outcome == 'success'
         run: cmake --build build --config Release -- -j2
 
-      # ---- Dependency report section ----
-      - name: Generate vcpkg upgrade/diff report
+      # ---- Dependency report section (does not require compiler detection) ----
+      - name: Generate vcpkg baseline/upgrade report
         id: dep_report
         run: |
           set -eo pipefail
-
           echo "## Dependency Report" >> "$GITHUB_STEP_SUMMARY"
 
           if [ -f vcpkg.json ]; then
@@ -84,48 +95,32 @@ jobs:
             fi
           fi
 
-          # 1) What would change if we updated to the latest ports tree?
           echo "### Proposed baseline updates (dry run)" >> "$GITHUB_STEP_SUMMARY"
-          {
-            "$VCPKG_ROOT/vcpkg" x-update-baseline --dry-run --x-manifest-root=. || true
-          } | tee vcpkg-baseline-dryrun.txt
+          { "$GITHUB_WORKSPACE/vcpkg/vcpkg" x-update-baseline --dry-run --x-manifest-root=. || true; } | tee vcpkg-baseline-dryrun.txt
           if [ -s vcpkg-baseline-dryrun.txt ]; then
-            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
-            cat vcpkg-baseline-dryrun.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
+            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY" && cat vcpkg-baseline-dryrun.txt >> "$GITHUB_STEP_SUMMARY" && echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No baseline changes suggested (or command not supported by current vcpkg)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # 2) Which installed packages are upgradeable under current tree?
           echo "### Upgradeable packages (classic listing)" >> "$GITHUB_STEP_SUMMARY"
-          {
-            "$VCPKG_ROOT/vcpkg" upgrade || true
-          } | tee vcpkg-upgrade.txt
+          { "$GITHUB_WORKSPACE/vcpkg/vcpkg" upgrade || true; } | tee vcpkg-upgrade.txt
           if [ -s vcpkg-upgrade.txt ]; then
-            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
-            cat vcpkg-upgrade.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
+            echo '\n````\n' >> "$GITHUB_STEP_SUMMARY" && cat vcpkg-upgrade.txt >> "$GITHUB_STEP_SUMMARY" && echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No upgradeable packages detected." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # 3) Missing packages (if CMake configure failed due to not found)
-          echo "### Missing or not-found packages during CMake configure" >> "$GITHUB_STEP_SUMMARY"
+          echo "### CMake configure status" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.cmake_configure.outcome }}" != "success" ]; then
-            echo "CMake configure failed; potential missing dependencies:" >> "$GITHUB_STEP_SUMMARY"
-            # Surface the last ~100 lines of CMakeError.log and CMakeOutput.log
+            echo "CMake configure failed; surfacing logs:" >> "$GITHUB_STEP_SUMMARY"
             if [ -f build/CMakeFiles/CMakeError.log ]; then
               tail -n 200 build/CMakeFiles/CMakeError.log | tee cmake-error-tail.txt
-              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
-              cat cmake-error-tail.txt >> "$GITHUB_STEP_SUMMARY"
-              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
+              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY" && cat cmake-error-tail.txt >> "$GITHUB_STEP_SUMMARY" && echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
             fi
             if [ -f build/CMakeFiles/CMakeOutput.log ]; then
               tail -n 200 build/CMakeFiles/CMakeOutput.log | tee cmake-output-tail.txt
-              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
-              cat cmake-output-tail.txt >> "$GITHUB_STEP_SUMMARY"
-              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
+              echo '\n````\n' >> "$GITHUB_STEP_SUMMARY" && cat cmake-output-tail.txt >> "$GITHUB_STEP_SUMMARY" && echo '\n````\n' >> "$GITHUB_STEP_SUMMARY"
             fi
           else
             echo "CMake configure succeeded; no missing packages detected by CMake." >> "$GITHUB_STEP_SUMMARY"
