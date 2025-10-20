@@ -19,7 +19,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc g++ cmake ninja-build
+        sudo apt-get install -y gcc g++ cmake ninja-build git build-essential
 
     - name: Set up vcpkg
       run: |
@@ -29,7 +29,6 @@ jobs:
     - name: Configure with AddressSanitizer
       run: |
         cmake -B build -S . \
-          -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -76,7 +75,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc g++ cmake ninja-build
+        sudo apt-get install -y gcc g++ cmake ninja-build git build-essential
 
     - name: Set up vcpkg
       run: |
@@ -86,7 +85,6 @@ jobs:
     - name: Configure with ThreadSanitizer
       run: |
         cmake -B build -S . \
-          -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -132,7 +130,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang clang-tidy cmake ninja-build
+        sudo apt-get install -y gcc g++ cmake ninja-build git build-essential
 
     - name: Set up vcpkg
       run: |
@@ -142,7 +140,6 @@ jobs:
     - name: Configure project
       run: |
         cmake -B build -S . \
-          -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -200,7 +197,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc g++ cmake ninja-build
+        sudo apt-get install -y gcc g++ cmake ninja-build git build-essential
 
     - name: Set up vcpkg
       run: |
@@ -210,7 +207,6 @@ jobs:
     - name: Configure with strict warnings
       run: |
         cmake -B build -S . \
-          -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -268,7 +264,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc g++ cmake ninja-build valgrind
+        sudo apt-get install -y gcc g++ cmake ninja-build git build-essential
 
     - name: Set up vcpkg
       run: |
@@ -278,7 +274,6 @@ jobs:
     - name: Configure
       run: |
         cmake -B build -S . \
-          -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
