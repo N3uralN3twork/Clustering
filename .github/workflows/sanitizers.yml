@@ -5,150 +5,113 @@ on:
     branches: [ main, develop ]
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM UTC
-
-env:
-  VCPKG_BINARY_SOURCES: 'clear;x-gha,readwrite'
 
 jobs:
-  mingw-address-sanitizer:
-    name: MinGW AddressSanitizer
-    runs-on: windows-latest
+  address-sanitizer:
+    name: AddressSanitizer & UBSan
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
-          mingw-w64-x86_64-gdb
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc g++ cmake ninja-build
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgJsonGlob: 'vcpkg.json'
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Configure with AddressSanitizer
-      shell: msys2 {0}
       run: |
         cmake -B build -S . \
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g -std=c++23" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -fsanitize=undefined" \
-          -DBUILD_TESTS=ON \
-          -DBUILD_BENCHMARKS=OFF
+          -DBUILD_TESTS=ON
 
-    - name: Build with ASan
-      shell: msys2 {0}
-      run: |
-        cmake --build build -j $(nproc)
+    - name: Build
+      run: cmake --build build -j $(nproc)
 
-    - name: Run tests with AddressSanitizer
-      shell: msys2 {0}
+    - name: Run tests with sanitizers
       continue-on-error: true
       run: |
         cd build
-        export ASAN_OPTIONS="halt_on_error=1:detect_leaks=1:check_initialization_order=1"
-        export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
-        ctest --output-on-failure --timeout 300 > ../asan_results.txt 2>&1
+        export ASAN_OPTIONS="halt_on_error=0:detect_leaks=1:check_initialization_order=1"
+        export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0"
+        ctest --output-on-failure --timeout 300 2>&1 | tee ../asan_results.txt
 
-    - name: Check for ASan violations
-      shell: pwsh
+    - name: Check for violations
       run: |
-        if (Test-Path asan_results.txt) {
-          $content = Get-Content asan_results.txt -Raw
-          if ($content -match "ERROR: (AddressSanitizer|UndefinedBehaviorSanitizer)") {
-            Write-Host "::error::Sanitizer detected memory/undefined behavior errors!"
-            Get-Content asan_results.txt
-            exit 1
-          } else {
-            Write-Host "✅ No sanitizer errors detected"
-          }
-        }
+        if grep -q "ERROR: \(AddressSanitizer\|UndefinedBehaviorSanitizer\)" asan_results.txt; then
+          echo "::error::Sanitizer detected memory/undefined behavior errors!"
+          cat asan_results.txt
+          exit 1
+        else
+          echo "✅ No sanitizer errors detected"
+        fi
 
-    - name: Upload ASan results
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: asan-results
         path: asan_results.txt
 
-  mingw-thread-sanitizer:
-    name: MinGW ThreadSanitizer
-    runs-on: windows-latest
+  thread-sanitizer:
+    name: ThreadSanitizer
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc g++ cmake ninja-build
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
 
     - name: Configure with ThreadSanitizer
-      shell: msys2 {0}
       run: |
         cmake -B build -S . \
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -std=c++23" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      shell: msys2 {0}
       run: cmake --build build -j $(nproc)
 
     - name: Run tests with ThreadSanitizer
-      shell: msys2 {0}
       continue-on-error: true
       run: |
         cd build
-        export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1"
-        ctest --output-on-failure > ../tsan_results.txt 2>&1
+        export TSAN_OPTIONS="halt_on_error=0:second_deadlock_stack=1"
+        ctest --output-on-failure 2>&1 | tee ../tsan_results.txt
 
-    - name: Check for TSan violations
-      shell: pwsh
+    - name: Check for violations
       run: |
-        if (Test-Path tsan_results.txt) {
-          $content = Get-Content tsan_results.txt -Raw
-          if ($content -match "WARNING: ThreadSanitizer") {
-            Write-Host "::error::ThreadSanitizer detected data races!"
-            Get-Content tsan_results.txt
-            exit 1
-          } else {
-            Write-Host "✅ No ThreadSanitizer errors detected"
-          }
-        }
+        if grep -q "WARNING: ThreadSanitizer" tsan_results.txt; then
+          echo "::error::ThreadSanitizer detected data races!"
+          cat tsan_results.txt
+          exit 1
+        else
+          echo "✅ No thread safety issues detected"
+        fi
 
-    - name: Upload TSan results
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -156,29 +119,24 @@ jobs:
         path: tsan_results.txt
 
   static-analysis:
-    name: Static Analysis (CppCheck)
-    runs-on: windows-latest
+    name: Static Analysis (Clang-Tidy)
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
-          mingw-w64-x86_64-cppcheck
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang clang-tidy cmake ninja-build
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
 
     - name: Configure project
-      shell: msys2 {0}
       run: |
         cmake -B build -S . \
           -G "Ninja" \
@@ -187,136 +145,105 @@ jobs:
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DBUILD_TESTS=ON
 
-    - name: Run CppCheck
-      shell: msys2 {0}
+    - name: Run clang-tidy
       continue-on-error: true
       run: |
-        cppcheck --project=build/compile_commands.json \
-          --enable=all \
-          --inconclusive \
-          --std=c++23 \
-          --xml \
-          --xml-version=2 \
-          --suppress=missingIncludeSystem \
-          --suppress=unmatchedSuppression \
-          -I include \
-          src/ \
-          2> cppcheck_report.xml
+        find src include -name "*.cpp" -o -name "*.hpp" | \
+          xargs clang-tidy -p build --checks='*,-fuchsia-*,-google-*,-llvm*' \
+          2>&1 | tee clang_tidy_results.txt || true
 
-    - name: Convert CppCheck results to readable format
-      shell: pwsh
+    - name: Generate report
       run: |
-        if (Test-Path cppcheck_report.xml) {
-          [xml]$xml = Get-Content cppcheck_report.xml
-          $errors = $xml.results.errors.error
-          
-          if ($errors) {
-            echo "# CppCheck Analysis Results" > cppcheck_report.md
-            echo "" >> cppcheck_report.md
-            echo "| Severity | File | Line | Message |" >> cppcheck_report.md
-            echo "|----------|------|------|---------|" >> cppcheck_report.md
+        {
+          echo "# Static Analysis Results"
+          echo ""
+          if [ -s clang_tidy_results.txt ]; then
+            ERROR_COUNT=$(grep -c "error:" clang_tidy_results.txt || echo "0")
+            WARNING_COUNT=$(grep -c "warning:" clang_tidy_results.txt || echo "0")
+            echo "- **Errors**: $ERROR_COUNT"
+            echo "- **Warnings**: $WARNING_COUNT"
+            echo ""
+            echo "## Details"
+            echo '```'
+            cat clang_tidy_results.txt
+            echo '```'
             
-            foreach ($error in $errors) {
-              $severity = $error.severity
-              $msg = $error.msg
-              $file = $error.location.file
-              $line = $error.location.line
-              echo "| $severity | $file | $line | $msg |" >> cppcheck_report.md
-            }
-            
-            # Check for high-severity issues
-            $criticalErrors = $errors | Where-Object { $_.severity -in @("error", "warning") }
-            if ($criticalErrors) {
-              Write-Host "::warning::CppCheck found $($criticalErrors.Count) critical issues"
-            }
-          } else {
-            echo "# CppCheck Analysis Results" > cppcheck_report.md
-            echo "" >> cppcheck_report.md
-            echo "✅ No issues found" >> cppcheck_report.md
-          }
-        }
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "::warning::Clang-tidy found $ERROR_COUNT errors"
+            fi
+          else
+            echo "✅ No issues found"
+          fi
+        } > clang_tidy_report.md
 
-    - name: Upload CppCheck results
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: cppcheck-results
+        name: static-analysis-results
         path: |
-          cppcheck_report.xml
-          cppcheck_report.md
+          clang_tidy_results.txt
+          clang_tidy_report.md
 
   gcc-warnings:
-    name: GCC Warning Analysis (C++23)
-    runs-on: windows-latest
+    name: GCC Strict Warnings
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc g++ cmake ninja-build
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
 
     - name: Configure with strict warnings
-      shell: msys2 {0}
       run: |
         cmake -B build -S . \
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wnull-dereference -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wformat=2 -std=c++23" \
+          -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wnull-dereference -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wformat=2" \
           -DBUILD_TESTS=ON
 
     - name: Build with strict warnings
-      shell: msys2 {0}
       continue-on-error: true
-      run: |
-        cmake --build build -j $(nproc) 2> warnings.txt
+      run: cmake --build build -j $(nproc) 2>&1 | tee warnings.txt
 
-    - name: Analyze warnings
-      shell: pwsh
+    - name: Generate report
       run: |
-        if (Test-Path warnings.txt) {
-          $content = Get-Content warnings.txt -Raw
-          if ($content) {
-            Write-Host "::warning::Build produced warnings"
-            Get-Content warnings.txt
+        {
+          echo "# GCC Warning Analysis"
+          echo ""
+          if [ -s warnings.txt ]; then
+            WARNING_COUNT=$(grep -c "warning:" warnings.txt || echo "0")
+            ERROR_COUNT=$(grep -c "error:" warnings.txt || echo "0")
+            echo "- **Warnings**: $WARNING_COUNT"
+            echo "- **Errors**: $ERROR_COUNT"
+            echo ""
+            echo "## Details"
+            echo '```'
+            cat warnings.txt
+            echo '```'
             
-            # Count warnings
-            $warningCount = ([regex]::Matches($content, "warning:")).Count
-            $errorCount = ([regex]::Matches($content, "error:")).Count
-            
-            echo "# GCC Warning Analysis" > warning_report.md
-            echo "" >> warning_report.md
-            echo "- **Warnings**: $warningCount" >> warning_report.md
-            echo "- **Errors**: $errorCount" >> warning_report.md
-            echo "" >> warning_report.md
-            echo "## Details" >> warning_report.md
-            echo '```' >> warning_report.md
-            Get-Content warnings.txt >> warning_report.md
-            echo '```' >> warning_report.md
-            
-            if ($errorCount -gt 0) {
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "::error::Build failed with $ERROR_COUNT errors"
               exit 1
-            }
-          } else {
-            Write-Host "✅ No warnings detected"
-            echo "# GCC Warning Analysis" > warning_report.md
-            echo "" >> warning_report.md
-            echo "✅ No warnings or errors detected" >> warning_report.md
-          }
-        }
+            elif [ "$WARNING_COUNT" -gt 0 ]; then
+              echo "::warning::Build produced $WARNING_COUNT warnings"
+            fi
+          else
+            echo "✅ No warnings or errors detected"
+          fi
+        } > warning_report.md
 
-    - name: Upload warning report
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -325,117 +252,110 @@ jobs:
           warnings.txt
           warning_report.md
 
-  memory-leak-valgrind:
-    name: Memory Leak Detection (Valgrind-like)
-    runs-on: windows-latest
+  valgrind:
+    name: Valgrind Memory Check
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc g++ cmake ninja-build valgrind
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
 
-    - name: Configure with Debug info
-      shell: msys2 {0}
+    - name: Configure
       run: |
         cmake -B build -S . \
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-g -O0 -std=c++23" \
+          -DCMAKE_CXX_FLAGS="-g -O0" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      shell: msys2 {0}
       run: cmake --build build -j $(nproc)
 
-    - name: Run tests with leak detection (via ASan)
-      shell: msys2 {0}
+    - name: Run Valgrind
       continue-on-error: true
       run: |
         cd build
-        # Use ASan's leak detection as alternative to Valgrind on Windows
-        export ASAN_OPTIONS="detect_leaks=1:fast_unwind_on_malloc=0"
-        cmake -DCMAKE_CXX_FLAGS="-fsanitize=address -g -O0 -std=c++23" \
-              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" ..
-        cmake --build . -j $(nproc)
-        ctest --output-on-failure > ../leak_detection.txt 2>&1
+        ctest -T memcheck --output-on-failure 2>&1 | tee ../valgrind_results.txt || true
 
     - name: Check for leaks
-      shell: pwsh
       run: |
-        if (Test-Path leak_detection.txt) {
-          $content = Get-Content leak_detection.txt -Raw
-          if ($content -match "memory leak|Direct leak|Indirect leak") {
-            Write-Host "::error::Memory leaks detected!"
-            Get-Content leak_detection.txt
-            exit 1
-          } else {
-            Write-Host "✅ No memory leaks detected"
-          }
-        }
+        if grep -q "definitely lost\|indirectly lost\|possibly lost" valgrind_results.txt; then
+          echo "::error::Memory leaks detected!"
+          cat valgrind_results.txt
+          exit 1
+        else
+          echo "✅ No memory leaks detected"
+        fi
 
-    - name: Upload leak detection results
+    - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: leak-detection-results
-        path: leak_detection.txt
+        name: valgrind-results
+        path: valgrind_results.txt
 
   summary:
-    name: Memory Safety Summary
-    runs-on: windows-latest
-    needs: [mingw-address-sanitizer, mingw-thread-sanitizer, static-analysis, gcc-warnings, memory-leak-valgrind]
+    name: Generate Summary Report
+    runs-on: ubuntu-latest
+    needs: [address-sanitizer, thread-sanitizer, static-analysis, gcc-warnings, valgrind]
     if: always()
     
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
 
-    - name: Generate summary report
-      shell: pwsh
+    - name: Generate summary
       run: |
-        echo "# Memory Safety Analysis Summary (MinGW + C++23)" > summary.md
-        echo "" >> summary.md
-        echo "## Test Results" >> summary.md
-        echo "" >> summary.md
+        cat > summary.md << 'EOF'
+        # Memory Safety Analysis Summary
         
-        # Check each job result
-        $jobs = @{
-          "MinGW AddressSanitizer" = "${{ needs.mingw-address-sanitizer.result }}"
-          "MinGW ThreadSanitizer" = "${{ needs.mingw-thread-sanitizer.result }}"
-          "Static Analysis" = "${{ needs.static-analysis.result }}"
-          "GCC Warnings" = "${{ needs.gcc-warnings.result }}"
-          "Memory Leak Detection" = "${{ needs.memory-leak-valgrind.result }}"
-        }
+        ## Test Results
         
-        foreach ($job in $jobs.GetEnumerator()) {
-          $status = if ($job.Value -eq "success") { "✅ Passed" } else { "❌ Failed" }
-          echo "- **$($job.Key)**: $status" >> summary.md
-        }
+        | Test | Status |
+        |------|--------|
+        | AddressSanitizer & UBSan | ${{ needs.address-sanitizer.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+        | ThreadSanitizer | ${{ needs.thread-sanitizer.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+        | Static Analysis | ${{ needs.static-analysis.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+        | GCC Strict Warnings | ${{ needs.gcc-warnings.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+        | Valgrind | ${{ needs.valgrind.result == 'success' && '✅ Passed' || '❌ Failed' }} |
         
-        echo "" >> summary.md
-        echo "## Compiler Information" >> summary.md
-        echo "- **Compiler**: MinGW GCC" >> summary.md
-        echo "- **C++ Standard**: C++23" >> summary.md
-        echo "- **Build System**: CMake + Ninja" >> summary.md
-        echo "" >> summary.md
-        echo "## Details" >> summary.md
-        echo "See individual job artifacts for detailed reports." >> summary.md
+        ## Environment
+        
+        - **OS**: Ubuntu Latest
+        - **Compiler**: GCC (native)
+        - **C++ Standard**: C++23
+        - **Build System**: CMake + Ninja
+        
+        ## Detailed Reports
+        
+        Individual test results are available in the artifacts:
+        - `asan-results`: AddressSanitizer output
+        - `tsan-results`: ThreadSanitizer output
+        - `static-analysis-results`: Clang-tidy analysis
+        - `gcc-warnings`: GCC warning analysis
+        - `valgrind-results`: Valgrind memory check
+        
+        EOF
+        
+        cat summary.md
 
     - name: Upload summary
       uses: actions/upload-artifact@v4
       with:
         name: memory-safety-summary
         path: summary.md
+    
+    - name: Post summary to job
+      run: |
+        cat summary.md >> $GITHUB_STEP_SUMMARY
