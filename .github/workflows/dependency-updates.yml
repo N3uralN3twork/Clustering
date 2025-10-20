@@ -14,76 +14,29 @@ on:
 
 jobs:
   build-and-report:
-    runs-on: windows-latest
-
-    defaults:
-      run:
-        shell: msys2 {0}
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up MSYS2 (MINGW64)
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            jq
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-make
-
-      - name: Verify MinGW environment
+      - name: Install dependencies
         run: |
-          echo "MSYSTEM=$MSYSTEM"
-          which gcc && gcc --version
-          which g++ && g++ --version
-          which cmake && cmake --version
-          which mingw32-make && mingw32-make --version
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
 
-      - name: Set up vcpkg (manifest mode)
+      - name: Set up vcpkg
         run: |
           git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
           "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
-          VCPKG_ROOT_POSIX=$(cygpath -u "$GITHUB_WORKSPACE/vcpkg")
-          VCPKG_ROOT_WIN=$(cygpath -m "$GITHUB_WORKSPACE/vcpkg")
-
-          echo "VCPKG_ROOT=$VCPKG_ROOT_WIN" >> $GITHUB_ENV
-          echo "VCPKG_ROOT_POSIX=$VCPKG_ROOT_POSIX" >> $GITHUB_ENV
-
-          # Keep triplets on MinGW to avoid x64-windows detection
-          echo "VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
-          echo "VCPKG_HOST_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
-          # IMPORTANT: allow vcpkg to download helpers if it needs to (no Powershell error)
-          echo "VCPKG_FORCE_SYSTEM_BINARIES=0" >> $GITHUB_ENV
-          echo "VCPKG_FEATURE_FLAGS=manifests,versions" >> $GITHUB_ENV
-
-      # Do NOT run `vcpkg install` here; let CMake + vcpkg toolchain drive it.
-
-      - name: Configure (CMake + MinGW Makefiles + vcpkg)
-        id: cmake_configure
+      - name: Configure
         run: |
-          export VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic
-
-          cmake -S . -B build -G "MinGW Makefiles" \
-            -DCMAKE_MAKE_PROGRAM=/mingw64/bin/mingw32-make.exe \
-            -DCMAKE_C_COMPILER=/mingw64/bin/gcc.exe \
-            -DCMAKE_CXX_COMPILER=/mingw64/bin/g++.exe \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_POSIX/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
-            -DVCPKG_HOST_TRIPLET=x64-mingw-dynamic \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SH=CMAKE_SH-NOTFOUND
-
-          echo "Selected C/CXX compilers:" && grep -E "^CMAKE_(C|CXX)_COMPILER:FILEPATH" build/CMakeCache.txt || true
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        if: steps.cmake_configure.outcome == 'success'
-        run: cmake --build build --config Release -- -j2
+        run: cmake --build build --config Release -j$(nproc)
 
       # ---- Dependency report section ----
       - name: Generate vcpkg baseline/upgrade report
