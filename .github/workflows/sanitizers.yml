@@ -23,7 +23,7 @@ jobs:
 
     - name: Set up vcpkg
       run: |
-        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
         "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with AddressSanitizer
@@ -79,7 +79,7 @@ jobs:
 
     - name: Set up vcpkg
       run: |
-        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
         "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with ThreadSanitizer
@@ -134,7 +134,7 @@ jobs:
 
     - name: Set up vcpkg
       run: |
-        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
         "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure project
@@ -201,7 +201,7 @@ jobs:
 
     - name: Set up vcpkg
       run: |
-        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
         "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with strict warnings
@@ -268,7 +268,7 @@ jobs:
 
     - name: Set up vcpkg
       run: |
-        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
         "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure
