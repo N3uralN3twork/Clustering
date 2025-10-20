@@ -67,17 +67,15 @@ jobs:
       - name: Configure (CMake + MinGW Makefiles + vcpkg)
         id: cmake_configure
         run: |
-          # Ensure we're using the MinGW cmake from /mingw64/bin
-          CMAKE_BIN=$(which cmake)
-          echo "Using CMake at: $CMAKE_BIN"
+          export VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic
 
-          # Explicitly point CMake to the MinGW make and compilers
           cmake -S . -B build -G "MinGW Makefiles" \
             -DCMAKE_MAKE_PROGRAM=/mingw64/bin/mingw32-make.exe \
             -DCMAKE_C_COMPILER=/mingw64/bin/gcc.exe \
             -DCMAKE_CXX_COMPILER=/mingw64/bin/g++.exe \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_POSIX/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
+            -DVCPKG_HOST_TRIPLET=x64-mingw-dynamic \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SH=CMAKE_SH-NOTFOUND
 
