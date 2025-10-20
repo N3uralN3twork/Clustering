@@ -16,7 +16,6 @@ jobs:
   build-and-report:
     runs-on: windows-latest
 
-    # Run commands inside MSYS2 MINGW64 so MinGW toolchain is on PATH
     defaults:
       run:
         shell: msys2 {0}
@@ -30,7 +29,6 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          # IMPORTANT: install **MinGW** variants of cmake and make, not MSYS ones.
           install: >-
             git
             jq
@@ -47,7 +45,6 @@ jobs:
           which mingw32-make && mingw32-make --version
 
       - name: Set up vcpkg (manifest mode)
-        # Use POSIX bootstrap and keep paths consistent for MSYS2
         run: |
           git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
           "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
@@ -61,18 +58,24 @@ jobs:
           # Keep triplets on MinGW to avoid x64-windows detection
           echo "VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
           echo "VCPKG_HOST_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
-          echo "VCPKG_FORCE_SYSTEM_BINARIES=1" >> $GITHUB_ENV
+          # IMPORTANT: allow vcpkg to download helpers if it needs to (no Powershell error)
+          echo "VCPKG_FORCE_SYSTEM_BINARIES=0" >> $GITHUB_ENV
           echo "VCPKG_FEATURE_FLAGS=manifests,versions" >> $GITHUB_ENV
 
-      # Do NOT pre-run `vcpkg install` here; let CMake + toolchain resolve deps.
+      # Do NOT run `vcpkg install` here; let CMake + vcpkg toolchain drive it.
 
       - name: Configure (CMake + MinGW Makefiles + vcpkg)
         id: cmake_configure
         run: |
+          # Ensure we're using the MinGW cmake from /mingw64/bin
           CMAKE_BIN=$(which cmake)
           echo "Using CMake at: $CMAKE_BIN"
 
+          # Explicitly point CMake to the MinGW make and compilers
           cmake -S . -B build -G "MinGW Makefiles" \
+            -DCMAKE_MAKE_PROGRAM=/mingw64/bin/mingw32-make.exe \
+            -DCMAKE_C_COMPILER=/mingw64/bin/gcc.exe \
+            -DCMAKE_CXX_COMPILER=/mingw64/bin/g++.exe \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_POSIX/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
             -DCMAKE_BUILD_TYPE=Release \
