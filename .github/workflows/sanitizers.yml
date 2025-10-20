@@ -37,7 +37,7 @@ jobs:
           -DBUILD_TESTS=ON
 
     - name: Build
-      run: cmake --build --config Debug build -j $(nproc)
+      run: cmake --build build --config Debug -j $(nproc)
 
     - name: Run tests with sanitizers
       continue-on-error: true
@@ -93,7 +93,7 @@ jobs:
           -DBUILD_TESTS=ON
 
     - name: Build
-      run: cmake --build --config Debug build -j $(nproc)
+      run: cmake --build build --config Debug -j $(nproc)
 
     - name: Run tests with ThreadSanitizer
       continue-on-error: true
