@@ -21,10 +21,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc g++ cmake ninja-build
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+    - name: Set up vcpkg
+      run: |
+        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with AddressSanitizer
       run: |
@@ -32,12 +32,13 @@ jobs:
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
           -DCMAKE_CXX_FLAGS="-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -fsanitize=undefined" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      run: cmake --build build -j $(nproc)
+      run: cmake --build --config Debug build -j $(nproc)
 
     - name: Run tests with sanitizers
       continue-on-error: true
@@ -77,10 +78,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc g++ cmake ninja-build
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+    - name: Set up vcpkg
+      run: |
+        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with ThreadSanitizer
       run: |
@@ -88,12 +89,13 @@ jobs:
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
           -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      run: cmake --build build -j $(nproc)
+      run: cmake --build --config Debug build -j $(nproc)
 
     - name: Run tests with ThreadSanitizer
       continue-on-error: true
@@ -132,10 +134,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y clang clang-tidy cmake ninja-build
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+    - name: Set up vcpkg
+      run: |
+        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure project
       run: |
@@ -143,6 +145,7 @@ jobs:
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DBUILD_TESTS=ON
 
@@ -199,10 +202,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc g++ cmake ninja-build
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+    - name: Set up vcpkg
+      run: |
+        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure with strict warnings
       run: |
@@ -210,12 +213,13 @@ jobs:
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
           -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wnull-dereference -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wformat=2" \
           -DBUILD_TESTS=ON
 
     - name: Build with strict warnings
       continue-on-error: true
-      run: cmake --build build -j $(nproc) 2>&1 | tee warnings.txt
+      run: cmake --build build --config Debug -j $(nproc) 2>&1 | tee warnings.txt
 
     - name: Generate report
       run: |
@@ -266,10 +270,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc g++ cmake ninja-build valgrind
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+    - name: Set up vcpkg
+      run: |
+        git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+        "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
 
     - name: Configure
       run: |
@@ -277,11 +281,12 @@ jobs:
           -G "Ninja" \
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" \
           -DCMAKE_CXX_FLAGS="-g -O0" \
           -DBUILD_TESTS=ON
 
     - name: Build
-      run: cmake --build build -j $(nproc)
+      run: cmake --build build --config Debug -j $(nproc)
 
     - name: Run Valgrind
       continue-on-error: true
