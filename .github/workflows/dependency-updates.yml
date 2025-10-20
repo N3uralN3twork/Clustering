@@ -1,4 +1,4 @@
-name: dependency-updates
+name: Update Dependencies
 
 on:
   push:
@@ -30,58 +30,61 @@ jobs:
         with:
           msystem: MINGW64
           update: true
+          # IMPORTANT: install **MinGW** variants of cmake and make, not MSYS ones.
           install: >-
             git
-            cmake
-            make
             jq
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
 
-      - name: Verify MinGW toolchain
+      - name: Verify MinGW environment
         run: |
-          which gcc || true
-          which g++ || true
-          gcc --version || true
-          g++ --version || true
-          which make || true
+          echo "MSYSTEM=$MSYSTEM"
+          which gcc && gcc --version
+          which g++ && g++ --version
+          which cmake && cmake --version
+          which mingw32-make && mingw32-make --version
 
       - name: Set up vcpkg (manifest mode)
-        # IMPORTANT: bootstrap the POSIX script so the toolchain remains POSIX-friendly
+        # Use POSIX bootstrap and keep paths consistent for MSYS2
         run: |
           git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
           "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
-          # Normalize paths (both POSIX and Windows) to avoid the D;\ path glitch
+
           VCPKG_ROOT_POSIX=$(cygpath -u "$GITHUB_WORKSPACE/vcpkg")
           VCPKG_ROOT_WIN=$(cygpath -m "$GITHUB_WORKSPACE/vcpkg")
+
           echo "VCPKG_ROOT=$VCPKG_ROOT_WIN" >> $GITHUB_ENV
           echo "VCPKG_ROOT_POSIX=$VCPKG_ROOT_POSIX" >> $GITHUB_ENV
-          # Keep triplets consistent for host and target to avoid x64-windows auto-pick
+
+          # Keep triplets on MinGW to avoid x64-windows detection
           echo "VCPKG_DEFAULT_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
           echo "VCPKG_HOST_TRIPLET=x64-mingw-dynamic" >> $GITHUB_ENV
-          # Avoid downloading extra helpers that may flip shells; keep system binaries
           echo "VCPKG_FORCE_SYSTEM_BINARIES=1" >> $GITHUB_ENV
-          # Enable manifest/versions features explicitly
           echo "VCPKG_FEATURE_FLAGS=manifests,versions" >> $GITHUB_ENV
 
-      # NOTE: We intentionally DO NOT call `vcpkg install` here because under MSYS2 it can
-      # trigger a Windows-hosted compiler detection that mangles drive letters (D;\...).
-      # CMake + the vcpkg toolchain in manifest mode will resolve and build the dependencies.
+      # Do NOT pre-run `vcpkg install` here; let CMake + toolchain resolve deps.
 
       - name: Configure (CMake + MinGW Makefiles + vcpkg)
         id: cmake_configure
         run: |
+          CMAKE_BIN=$(which cmake)
+          echo "Using CMake at: $CMAKE_BIN"
+
           cmake -S . -B build -G "MinGW Makefiles" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_POSIX/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SH=CMAKE_SH-NOTFOUND
+
           echo "Selected C/CXX compilers:" && grep -E "^CMAKE_(C|CXX)_COMPILER:FILEPATH" build/CMakeCache.txt || true
 
       - name: Build
         if: steps.cmake_configure.outcome == 'success'
         run: cmake --build build --config Release -- -j2
 
-      # ---- Dependency report section (does not require compiler detection) ----
+      # ---- Dependency report section ----
       - name: Generate vcpkg baseline/upgrade report
         id: dep_report
         run: |
