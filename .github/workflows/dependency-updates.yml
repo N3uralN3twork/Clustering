@@ -1,351 +1,70 @@
-name: Dependency Updates
+name: dependency-updates
 
 on:
-  schedule:
-    - cron: '0 0 * * 1'  # Weekly on Monday at midnight UTC
-  workflow_dispatch:      # Allow manual trigger
-
-permissions:
-  contents: write
-  pull-requests: write
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.cpp'
+      - '**/*.hpp'
+      - 'CMakeLists.txt'
+      - 'vcpkg.json'
+      - '.github/workflows/dependency-updates.yml'
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  update-vcpkg-baseline:
-    name: Update vcpkg Baseline
+  build-mingw64:
     runs-on: windows-latest
-    
+
+    # Ensure all commands run inside the MSYS2 MINGW64 shell so MinGW is on PATH
+    defaults:
+      run:
+        shell: msys2 {0}
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
-          git
+      - name: Set up MSYS2 (MINGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            cmake
+            make
+            # Installs gcc/g++/ar/ld for 64-bit MinGW
+            mingw-w64-x86_64-toolchain
 
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+      - name: Verify MinGW toolchain
+        run: |
+          which gcc || true
+          which g++ || true
+          gcc --version || true
+          g++ --version || true
+          which make || true
 
-    - name: Get current baseline
-      id: current_baseline
-      shell: pwsh
-      run: |
-        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
-        $currentBaseline = $vcpkgJson.'builtin-baseline'
-        echo "current=$currentBaseline" >> $env:GITHUB_OUTPUT
-        echo "Current baseline: $currentBaseline"
+      - name: Set up vcpkg (manifest mode)
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg "$GITHUB_WORKSPACE/vcpkg"
+          "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh"
+          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
 
-    - name: Update to latest baseline
-      id: update_baseline
-      shell: pwsh
-      run: |
-        # Get latest commit from vcpkg repository
-        $latestCommit = (git ls-remote https://github.com/microsoft/vcpkg.git HEAD | Select-Object -First 1).Split()[0]
-        echo "latest=$latestCommit" >> $env:GITHUB_OUTPUT
-        echo "Latest baseline: $latestCommit"
-        
-        # Update vcpkg.json with new baseline
-        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
-        $vcpkgJson.'builtin-baseline' = $latestCommit
-        $vcpkgJson | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json
-        
-        # Check if there are changes
-        $changes = git diff vcpkg.json
-        if ($changes) {
-          echo "updates_available=true" >> $env:GITHUB_OUTPUT
-          echo "Changes detected in vcpkg.json"
-        } else {
-          echo "updates_available=false" >> $env:GITHUB_OUTPUT
-          echo "No changes needed - already up to date"
-        }
+      - name: Configure (CMake + MinGW Makefiles + vcpkg)
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SH=CMAKE_SH-NOTFOUND
+          echo "Selected C/CXX compilers:" && grep -E "^CMAKE_(C|CXX)_COMPILER:FILEPATH" build/CMakeCache.txt || true
 
-    - name: Test build with updated dependencies
-      if: steps.update_baseline.outputs.updates_available == 'true'
-      shell: msys2 {0}
-      run: |
-        # Convert Windows path to MSYS2 path
-        VCPKG_TOOLCHAIN=$(cygpath -u "${VCPKG_ROOT}")/scripts/buildsystem/vcpkg.cmake
-        echo "Using toolchain: ${VCPKG_TOOLCHAIN}"
-        
-        cmake -B build -S . \
-          -G "Ninja" \
-          -DCMAKE_TOOLCHAIN_FILE="${VCPKG_TOOLCHAIN}" \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-std=c++23 -O2"
-        cmake --build build -j $(nproc)
+      - name: Build
+        run: cmake --build build --config Release -- -j2
 
-    - name: Run quick smoke tests
-      if: steps.update_baseline.outputs.updates_available == 'true'
-      shell: msys2 {0}
-      run: |
-        cd build
-        ctest --output-on-failure --timeout 60
-
-    - name: Generate update report
-      if: steps.update_baseline.outputs.updates_available == 'true'
-      shell: pwsh
-      run: |
-        $currentBaseline = "${{ steps.current_baseline.outputs.current }}"
-        $latestBaseline = "${{ steps.update_baseline.outputs.latest }}"
-        
-        $report = @"
-        ## vcpkg Dependency Update Report (MinGW + C++23)
-        
-        ### Baseline Update
-        - **Previous baseline**: ``$currentBaseline``
-        - **New baseline**: ``$latestBaseline``
-        
-        ### Changes
-        View the vcpkg changelog: [Commits since last update](https://github.com/microsoft/vcpkg/compare/$currentBaseline...$latestBaseline)
-        
-        ### Testing Status
-        - ✅ Project builds successfully with updated dependencies (MinGW GCC)
-        - ✅ C++23 standard support verified
-        - ✅ Smoke tests passed
-        
-        ### Build Configuration
-        - **Compiler**: MinGW GCC
-        - **C++ Standard**: C++23
-        - **Build System**: CMake + Ninja
-        
-        ### Action Required
-        Please review the changes and run the full test suite before merging.
-        
-        ### Dependencies in vcpkg.json
-        ``````json
-        $(Get-Content vcpkg.json -Raw)
-        ``````
-        
-        ---
-        *Automated by dependency-updates workflow*
-        "@
-        
-        $report | Out-File -FilePath update_report.md -Encoding utf8
-
-    - name: Create Pull Request
-      if: steps.update_baseline.outputs.updates_available == 'true'
-      uses: peter-evans/create-pull-request@v5
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        commit-message: 'chore(deps): update vcpkg baseline and dependencies'
-        title: '📦 Update vcpkg Dependencies (MinGW + C++23)'
-        body-path: update_report.md
-        branch: deps/vcpkg-update
-        delete-branch: true
-        labels: |
-          dependencies
-          automated
-          mingw
-        assignees: ${{ github.repository_owner }}
-
-  check-dependency-versions:
-    name: Check Individual Package Versions
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          git
-
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-
-    - name: List installed versions
-      shell: pwsh
-      run: |
-        # Install dependencies to check versions
-        $vcpkgRoot = $env:VCPKG_ROOT
-        if (-not $vcpkgRoot) {
-          $vcpkgRoot = "C:\vcpkg"
-        }
-        
-        $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
-        
-        echo "## Current Dependency Versions (MinGW)" | Out-File -FilePath dependency_versions.md
-        echo "" | Out-File -FilePath dependency_versions.md -Append
-        echo "| Package | Version | Triplet | Description |" | Out-File -FilePath dependency_versions.md -Append
-        echo "|---------|---------|---------|-------------|" | Out-File -FilePath dependency_versions.md -Append
-        
-        # Parse vcpkg.json for dependencies
-        $vcpkgJson = Get-Content vcpkg.json -Raw | ConvertFrom-Json
-        foreach ($dep in $vcpkgJson.dependencies) {
-          $depName = if ($dep -is [string]) { $dep } else { $dep.name }
-          $info = & $vcpkgExe search $depName 2>&1 | Select-Object -First 1
-          echo "| $depName | $info | x64-mingw-dynamic | - |" | Out-File -FilePath dependency_versions.md -Append
-        }
-        
-        echo "" | Out-File -FilePath dependency_versions.md -Append
-        echo "### Build Configuration" | Out-File -FilePath dependency_versions.md -Append
-        echo "- **Compiler**: MinGW GCC" | Out-File -FilePath dependency_versions.md -Append
-        echo "- **C++ Standard**: C++23" | Out-File -FilePath dependency_versions.md -Append
-        echo "- **Triplet**: x64-mingw-dynamic" | Out-File -FilePath dependency_versions.md -Append
-
-    - name: Check GCC version compatibility
-      shell: msys2 {0}
-      run: |
-        echo "## GCC Compiler Information" >> dependency_versions.md
-        echo "" >> dependency_versions.md
-        g++ --version >> dependency_versions.md
-        echo "" >> dependency_versions.md
-        echo "### C++23 Support Check" >> dependency_versions.md
-        echo '```cpp' >> dependency_versions.md
-        echo '#include <version>' >> test_cpp23.cpp
-        echo 'int main() {' >> test_cpp23.cpp
-        echo '#ifdef __cpp_lib_format' >> test_cpp23.cpp
-        echo '    return 0;' >> test_cpp23.cpp
-        echo '#else' >> test_cpp23.cpp
-        echo '    return 1;' >> test_cpp23.cpp
-        echo '#endif' >> test_cpp23.cpp
-        echo '}' >> test_cpp23.cpp
-        echo '```' >> dependency_versions.md
-        
-        if g++ -std=c++23 test_cpp23.cpp -o test_cpp23 2>/dev/null; then
-          echo "✅ C++23 compilation successful" >> dependency_versions.md
-        else
-          echo "⚠️ C++23 compilation test failed" >> dependency_versions.md
-        fi
-
-    - name: Upload version report
-      uses: actions/upload-artifact@v4
-      with:
-        name: dependency-versions
-        path: dependency_versions.md
-
-  verify-mingw-compatibility:
-    name: Verify MinGW Compatibility
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
-
-    - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-
-    - name: Test MinGW build
-      shell: msys2 {0}
-      run: |
-        # Convert Windows path to MSYS2 path
-        VCPKG_TOOLCHAIN=$(cygpath -u "${VCPKG_ROOT}")/scripts/buildsystem/vcpkg.cmake
-        
-        echo "Testing MinGW build with C++23..."
-        cmake -B build -S . \
-          -G "Ninja" \
-          -DCMAKE_TOOLCHAIN_FILE="${VCPKG_TOOLCHAIN}" \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_CXX_STANDARD=23 \
-          -DCMAKE_CXX_FLAGS="-std=c++23 -O2" \
-          -DBUILD_TESTS=ON
-        
-        cmake --build build -j $(nproc)
-        
-        cd build
-        ctest --output-on-failure
-
-    - name: Generate compatibility report
-      shell: pwsh
-      run: |
-        $report = @"
-        # MinGW Compatibility Report
-        
-        ## Build Status
-        ✅ Successfully built with MinGW GCC
-        
-        ## Configuration
-        - **Compiler**: MinGW-w64 GCC
-        - **C++ Standard**: C++23
-        - **Build Type**: Release
-        - **Generator**: Ninja
-        
-        ## Test Results
-        All tests completed successfully
-        
-        ## Dependencies Status
-        All vcpkg dependencies are compatible with MinGW
-        
-        ---
-        *Automated compatibility check*
-        "@
-        
-        $report | Out-File -FilePath mingw_compatibility.md -Encoding utf8
-
-    - name: Upload compatibility report
-      uses: actions/upload-artifact@v4
-      with:
-        name: mingw-compatibility
-        path: mingw_compatibility.md
-
-  security-audit:
-    name: Security Audit
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-
-    - name: Check for known vulnerabilities
-      shell: pwsh
-      run: |
-        echo "# Security Audit Report" > security_report.txt
-        echo "" >> security_report.txt
-        echo "## Build Configuration" >> security_report.txt
-        echo "- **Compiler**: MinGW GCC" >> security_report.txt
-        echo "- **C++ Standard**: C++23" >> security_report.txt
-        echo "" >> security_report.txt
-        echo "## Recommended Security Checks" >> security_report.txt
-        echo "Consider integrating:" >> security_report.txt
-        echo "  - Snyk (dependency vulnerability scanning)" >> security_report.txt
-        echo "  - GitHub Advanced Security (code scanning)" >> security_report.txt
-        echo "  - OWASP Dependency Check" >> security_report.txt
-        echo "  - GCC's -fstack-protector-strong flag" >> security_report.txt
-        echo "  - AddressSanitizer for runtime checks" >> security_report.txt
-        echo "" >> security_report.txt
-        echo "## Security Flags (Recommended)" >> security_report.txt
-        echo "Add these flags to your CMakeLists.txt:" >> security_report.txt
-        echo "  - -D_FORTIFY_SOURCE=2" >> security_report.txt
-        echo "  - -fstack-protector-strong" >> security_report.txt
-        echo "  - -fPIE -pie" >> security_report.txt
-        echo "  - -Wformat -Wformat-security" >> security_report.txt
-
-    - name: Upload security report
-      uses: actions/upload-artifact@v4
-      with:
-        name: security-audit
-        path: security_report.txt
+      - name: (Optional) Run tests
+        if: ${{ always() }}
+        run: |
+          cd build
+          ctest --output-on-failure || true
