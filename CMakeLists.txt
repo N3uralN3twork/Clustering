@@ -102,6 +102,7 @@ endif()
 # ============================================================================
 add_executable(Clustering
         src/main.cpp
+        benchmarks/run_benchmarks.cpp
 )
 
 target_link_libraries(Clustering
