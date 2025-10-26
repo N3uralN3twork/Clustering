@@ -34,6 +34,7 @@ endif()
 find_package(fmt CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS math)
 find_package(Eigen3 CONFIG REQUIRED)
+find_package(benchmark CONFIG REQUIRED)
 
 # Conditionally find test/benchmark dependencies
 if(BUILD_BENCHMARKS)
@@ -77,6 +78,7 @@ target_link_libraries(clustering_lib
         Eigen3::Eigen
         fmt::fmt
         Boost::math
+        benchmark::benchmark_main
 )
 
 # Compiler-specific optimizations
@@ -175,6 +177,7 @@ message(STATUS "  Dependencies:")
 message(STATUS "    Eigen3               : ${Eigen3_VERSION}")
 message(STATUS "    fmt                  : ${fmt_VERSION}")
 message(STATUS "    Boost                : ${Boost_VERSION}")
+message(STATUS "    Benchmark            : ${Benchmark_VERSION}")
 if(BUILD_BENCHMARKS)
     message(STATUS "    Google Benchmark     : Found")
 endif()
