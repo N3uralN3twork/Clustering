@@ -67,7 +67,7 @@ inline T manhattan(
     const Eigen::Ref<const Eigen::VectorX<T>>& x,
     const Eigen::Ref<const Eigen::VectorX<T>>& y
 ) {
-    return (x - y).lpNorm<1>();
+    return (x - y).template lpNorm<1>();
 }
 
 /// Chebyshev distance: max(|x - y|)
@@ -76,7 +76,7 @@ inline T chebyshev(
     const Eigen::Ref<const Eigen::VectorX<T>>& x,
     const Eigen::Ref<const Eigen::VectorX<T>>& y
 ) {
-    return (x - y).lpNorm<Eigen::Infinity>();
+    return (x - y).template lpNorm<Eigen::Infinity>();
 }
 
 /// Minkowski distance: (sum(|x - y|^p))^(1/p)
@@ -111,7 +111,7 @@ inline T correlation(
 ) {
     Eigen::VectorX<T> x_centered = x.array() - x.mean();
     Eigen::VectorX<T> y_centered = y.array() - y.mean();
-    return cosine(x_centered, y_centered);
+    return cosine<T>(x_centered, y_centered);
 }
 
 /// Hamming distance: proportion of differing elements
@@ -147,7 +147,7 @@ public:
     /// Compute full distance matrix
     static MatrixXT compute(
         const Eigen::Ref<const MatrixXT>& X,
-        Metric metric = Metric::Euclidean,
+        const Metric metric = Metric::Euclidean,
         const DistanceOptions& opts = {}
     ) {
         const auto n_samples = X.rows();
@@ -163,8 +163,8 @@ public:
 
         // Mirror if we only computed upper triangle
         if (opts.upper_triangular_only) {
-            distances.triangularView<Eigen::Lower>() =
-                distances.triangularView<Eigen::Upper>().transpose();
+            distances.template triangularView<Eigen::Lower>() =
+                distances.template triangularView<Eigen::Upper>().transpose();
         }
 
         return distances;
@@ -174,7 +174,7 @@ public:
     /// Returns vector of size n*(n-1)/2
     static std::vector<T> compute_condensed(
         const Eigen::Ref<const MatrixXT>& X,
-        Metric metric = Metric::Euclidean
+        const Metric metric = Metric::Euclidean
     ) {
         const auto n_samples = X.rows();
         const size_t n_distances = (n_samples * (n_samples - 1)) / 2;
@@ -211,32 +211,33 @@ public:
         return distances;
     }
 
-private:
-    static DistanceMetric<T> get_metric_function(Metric metric) {
+    static DistanceMetric<T> get_metric_function(const Metric metric)
+    {
         switch (metric) {
-            case Metric::Euclidean:
-                return metrics::euclidean<T>;
-            case Metric::SquaredEuclidean:
-                return metrics::squared_euclidean<T>;
-            case Metric::Manhattan:
-                return metrics::manhattan<T>;
-            case Metric::Chebyshev:
-                return metrics::chebyshev<T>;
-            case Metric::Cosine:
-                return metrics::cosine<T>;
-            case Metric::Correlation:
-                return metrics::correlation<T>;
-            case Metric::Hamming:
-                return metrics::hamming<T>;
-            default:
-                return metrics::euclidean<T>;
+        case Metric::Euclidean:
+            return metrics::euclidean<T>;
+        case Metric::SquaredEuclidean:
+            return metrics::squared_euclidean<T>;
+        case Metric::Manhattan:
+            return metrics::manhattan<T>;
+        case Metric::Chebyshev:
+            return metrics::chebyshev<T>;
+        case Metric::Cosine:
+            return metrics::cosine<T>;
+        case Metric::Correlation:
+            return metrics::correlation<T>;
+        case Metric::Hamming:
+            return metrics::hamming<T>;
+        default:
+            return metrics::euclidean<T>;
         }
     }
 
+private:
     static void compute_sequential(
         const Eigen::Ref<const MatrixXT>& X,
         Eigen::Ref<MatrixXT> distances,
-        DistanceMetric<T> dist_func,
+        const DistanceMetric<T> dist_func,
         const DistanceOptions& opts
     ) {
         const auto n_samples = X.rows();
@@ -258,7 +259,7 @@ private:
     static void compute_parallel(
         const Eigen::Ref<const MatrixXT>& X,
         Eigen::Ref<MatrixXT> distances,
-        DistanceMetric<T> dist_func,
+        const DistanceMetric<T> dist_func,
         const DistanceOptions& opts
     ) {
         const auto n_samples = X.rows();
@@ -460,7 +461,7 @@ template<Scalar T>
 T max_intracluster_distance(
     const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& X,
     const Eigen::Ref<const Eigen::VectorXi>& labels,
-    int cluster_id,
+    const int cluster_id,
     Metric metric = Metric::Euclidean
 ) {
     // Extract points belonging to this cluster

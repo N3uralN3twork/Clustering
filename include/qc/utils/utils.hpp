@@ -1,23 +1,25 @@
 #pragma once
 
-#include <Eigen/Dense>
 #include <iostream> // For error reporting
+#include "distance.hpp"
 
 /**
  * @brief A collection of utility functions for clustering algorithms.
  *
- * This is a header-only class.
+ * This namespace provides fundamental "building block" functions
+ * used by multiple validation indices.
  */
-class Utils {
-public:
+namespace qc::utils {
+
     /**
      * @brief A struct to hold the results of the gss() (Get Sum of Squares) calculation.
      */
+    template<qc::Scalar T>
     struct GssResult {
-        double wgss = 0.0; // Within-cluster Sum of Squares
-        double bgss = 0.0; // Between-cluster Sum of Squares
-        double tss = 0.0;  // Total Sum of Squares (allmeandist in Python)
-        Eigen::MatrixXd centers; // The calculated centroids
+        T wgss = T{0.0}; // Within-cluster Sum of Squares
+        T bgss = T{0.0}; // Between-cluster Sum of Squares
+        T tss = T{0.0};  // Total Sum of Squares (allmeandist in Python)
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> centers; // The calculated centroids
     };
 
     /**
@@ -26,71 +28,57 @@ public:
      * This function performs a single pass over the dataset to efficiently
      * compute the mean of all points belonging to each cluster.
      *
-     * @param data The input data matrix where each row is a sample and each
-     * column is a feature (n_samples, n_features).
-     * @param labels A vector of cluster labels for each sample (n_samples, 1).
-     * Labels must be 0-indexed (i.e., from 0 to k-1).
-     * @return Eigen::MatrixXd A matrix where each row is the centroid for a
-     * cluster (k, n_features), where k is the number of clusters.
+     * @tparam T A floating-point type (e.g., double, float).
+     * @param data The input data matrix (n_samples, n_features).
+     * @param labels A vector of cluster labels (n_samples, 1).
+     * @return Eigen::Matrix<T, ...> A matrix where each row is the centroid (k, n_features).
      */
-    static Eigen::MatrixXd get_centroids(const Eigen::MatrixXd& data, const Eigen::VectorXi& labels) {
+    template<qc::Scalar T>
+    [[nodiscard]] Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> get_centroids(
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& data,
+        const Eigen::Ref<const Eigen::VectorXi>& labels
+    )  {
 
         // --- Input Validation ---
         if (data.rows() != labels.size()) {
-            // In a real application, throwing an exception would be better.
-            std::cerr << "Error in centers2: Data rows (" << data.rows()
+            std::cerr << "Error in get_centroids: Data rows (" << data.rows()
                       << ") does not match labels size (" << labels.size() << ")." << std::endl;
-            // Return an empty matrix to signal failure
-            return Eigen::MatrixXd();
+            return {};
         }
 
         if (data.rows() == 0) {
-            std::cerr << "Error in centers2: Input data is empty." << std::endl;
-            return Eigen::MatrixXd();
+            std::cerr << "Error in get_centroids: Input data is empty." << std::endl;
+            return {};
         }
 
         // --- Initialization ---
-
-        // Find the number of clusters (k).
-        // Assumes labels are 0-indexed (0, 1, ..., k-1).
-        // .maxCoeff() finds the highest label value. Add 1 for the total count.
         const int num_clusters = labels.maxCoeff() + 1;
-
-        // Get the number of features (dimensions) from the data.
         const long n_cols = data.cols();
-
-        // Initialize a matrix to store the *sum* of vectors for each cluster.
-        // We'll divide by the count later to get the mean.
-        Eigen::MatrixXd centers = Eigen::MatrixXd::Zero(num_clusters, n_cols);
-
-        // Initialize a vector to store the count of points in each cluster.
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> centers =
+            Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>::Zero(num_clusters, n_cols);
         Eigen::VectorXi cluster_counts = Eigen::VectorXi::Zero(num_clusters);
 
         // --- Calculation (Single Pass) ---
-
-        // Iterate through each data point (row) once.
         for (long i = 0; i < data.rows(); ++i) {
-            // Get the cluster ID for the i-th data point.
             const int cluster_id = labels(i);
 
-            // Add the i-th data point's feature vector (data.row(i))
-            // to the running sum for its cluster (centers.row(cluster_id)).
-            centers.row(cluster_id) += data.row(i);
+            // Add check for out-of-bounds labels
+            if (cluster_id < 0 || cluster_id >= num_clusters) {
+                 std::cerr << "Error in get_centroids: Label " << cluster_id
+                           << " is out of range [0, " << num_clusters - 1 << "]." << std::endl;
+                 continue; // Skip this invalid label
+            }
 
-            // Increment the counter for that cluster.
+            centers.row(cluster_id) += data.row(i);
             cluster_counts(cluster_id)++;
         }
 
         // --- Calculate Mean ---
-
-        // Now, divide the sums by the counts to get the final mean (centroid)
         for (int i = 0; i < num_clusters; ++i) {
             if (cluster_counts(i) > 0) {
-                // Use component-wise division
-                centers.row(i) /= cluster_counts(i);
+                centers.row(i) /= static_cast<T>(cluster_counts(i));
             }
-            // If cluster_counts(i) == 0, the center for that cluster
-            // remains a zero vector, which is a reasonable default for an empty cluster.
+            // If cluster_counts(i) == 0, center remains zero vector.
         }
 
         return centers;
@@ -99,46 +87,148 @@ public:
     /**
      * @brief Calculates the total, within-cluster, and between-cluster sum of squares.
      *
+     * @tparam T A floating-point type (e.g., double, float).
      * @param data The input data matrix (n_samples, n_features).
      * @param labels A vector of cluster labels (n_samples, 1).
-     * @return GssResult A struct containing wgss, bgss, tss, and the cluster centers.
+     * @return GssResult<T> A struct containing wgss, bgss, tss, and the cluster centers.
      */
-    static GssResult gss(const Eigen::MatrixXd& data, const Eigen::VectorXi& labels) {
+    template<qc::Scalar T>
+    [[nodiscard]] GssResult<T> gss(
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& data,
+        const Eigen::Ref<const Eigen::VectorXi>& labels
+    )  {
 
         // --- Step 1: Calculate Centroids ---
-        // We re-use the efficient function we already wrote.
-        Eigen::MatrixXd centers = get_centroids(data, labels);
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> centers = get_centroids<T>(data, labels);
+
+        if (centers.rows() == 0) {
+            // get_centroids failed, return empty result
+            return {};
+        }
 
         // --- Step 2: Calculate Total Sum of Squares (TSS) ---
-        // This is the sum of squared distances from all points to the grand mean.
-
-        // 1. Find the grand mean (mean of all data points)
-        // .colwise().mean() computes the mean of each column -> (1, n_features) vector
-        Eigen::RowVectorXd allmean = data.colwise().mean();
-
-        // 2. Subtract the grand mean from every row and get the sum of all squared elements.
-        // .rowwise() - allmean = broadcasts the subtraction
-        // .squaredNorm() = efficient sum of all squared elements in the resulting matrix
-        const double tss = (data.rowwise() - allmean).squaredNorm();
-
+        const Eigen::RowVector<T, Eigen::Dynamic> allmean = data.colwise().mean();
+        const T tss = (data.rowwise() - allmean).squaredNorm();
 
         // --- Step 3: Calculate Within-cluster Sum of Squares (WGSS) ---
-        // This is the sum of squared distances from each point to its *own* cluster centroid.
-        // We can do this in a single pass over the data, just like in centers2.
-        double wgss = 0.0;
+        T wgss = T{0.0};
+        const int num_clusters = static_cast<int>(centers.rows());
         for (long i = 0; i < data.rows(); ++i) {
             const int cluster_id = labels(i);
 
-            // (data.row(i) - centers.row(cluster_id)) gives the vector from point to centroid
-            // .squaredNorm() gives the squared distance
+            // Add check for out-of-bounds labels
+            if (cluster_id < 0 || cluster_id >= num_clusters) {
+                 continue; // Skip this invalid label
+            }
+
             wgss += (data.row(i) - centers.row(cluster_id)).squaredNorm();
         }
 
         // --- Step 4: Calculate Between-cluster Sum of Squares (BGSS) ---
-        // We know that TSS = WGSS + BGSS
-        const double bgss = tss - wgss;
+        const T bgss = tss - wgss;
 
         return {wgss, bgss, tss, centers};
     }
-};
 
+    /**
+     * @brief Calculates the Within-Cluster Sum of Squares (WGSS) for each cluster.
+     *
+     * @tparam T A floating-point type (e.g., double, float).
+     * @param data The input data matrix (n_samples, n_features).
+     * @param labels A vector of cluster labels (n_samples, 1).
+     * @param centers The pre-calculated centroids (k, n_features).
+     * @return Eigen::Vector<T, ...> A vector of size k, where each element i
+     * is the WGSS for cluster i.
+     */
+    template<qc::Scalar T>
+    [[nodiscard]] Eigen::Vector<T, Eigen::Dynamic> get_per_cluster_wgss(
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& data,
+        const Eigen::Ref<const Eigen::VectorXi>& labels,
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& centers
+    )  {
+        const int k = static_cast<int>(centers.rows());
+        Eigen::Vector<T, Eigen::Dynamic> per_cluster_wgss =
+            Eigen::Vector<T, Eigen::Dynamic>::Zero(k);
+
+        for (long i = 0; i < data.rows(); ++i) {
+            const int cluster_id = labels(i);
+
+            // Add check for out-of-bounds labels
+            if (cluster_id < 0 || cluster_id >= k) {
+                 continue; // Skip this invalid label
+            }
+
+            per_cluster_wgss(cluster_id) += (data.row(i) - centers.row(cluster_id)).squaredNorm();
+        }
+
+        return per_cluster_wgss;
+    }
+
+    /**
+     * @brief Struct to hold the W, B, and T scatter matrices.
+     * W = Within-cluster scatter matrix
+     * B = Between-cluster scatter matrix
+     * T = Total scatter matrix (T = W + B)
+     */
+    template<qc::Scalar T>
+    struct ScatterMatrices {
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> WITHIN;
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> BETWEEN;
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> TOTAL;
+    };
+
+    /**
+     * @brief Calculates the within-cluster, between-cluster, and total scatter matrices.
+     *
+     * @tparam T A floating-point type (e.g., double, float).
+     * @param data The input data matrix (n_samples, n_features).
+     * @param labels A vector of cluster labels (n_samples, 1).
+     * @param centers The pre-calculated centroids (k, n_features).
+     * @return ScatterMatrices<T> A struct containing the W, B, and T matrices (all p x p).
+     */
+    template<qc::Scalar T>
+    [[nodiscard]] ScatterMatrices<T> get_scatter_matrices(
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& data,
+        const Eigen::Ref<const Eigen::VectorXi>& labels,
+        const Eigen::Ref<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>& centers
+    )  {
+        const long n = data.rows();
+        const long p = data.cols();
+        const int k = static_cast<int>(centers.rows());
+
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> WITHIN =
+            Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>::Zero(p, p);
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> BETWEEN =
+            Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>::Zero(p, p);
+
+        Eigen::VectorXi cluster_counts = Eigen::VectorXi::Zero(k);
+        const Eigen::RowVector<T, Eigen::Dynamic> grand_mean = data.colwise().mean();
+
+        // Calculate W (Within-cluster scatter matrix)
+        for (long i = 0; i < n; ++i) {
+            const int cluster_id = labels(i);
+
+            // Add check for out-of-bounds labels
+            if (cluster_id < 0 || cluster_id >= k) {
+                 continue; // Skip this invalid label
+            }
+
+            const Eigen::RowVector<T, Eigen::Dynamic> diff_to_center = data.row(i) - centers.row(cluster_id);
+            WITHIN += diff_to_center.transpose() * diff_to_center; // (p,1) * (1,p) -> (p,p)
+            ++cluster_counts(cluster_id);
+        }
+
+        // Calculate B (Between-cluster scatter matrix)
+        for (int j = 0; j < k; ++j) {
+            if (cluster_counts(j) > 0) {
+                const Eigen::RowVector<T, Eigen::Dynamic> diff_to_mean = centers.row(j) - grand_mean;
+                BETWEEN += cluster_counts(j) * (diff_to_mean.transpose() * diff_to_mean);
+            }
+        }
+
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> Total = WITHIN +BETWEEN;
+
+        return {WITHIN, BETWEEN, Total};
+    }
+
+} // namespace qc::utils

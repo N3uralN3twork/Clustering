@@ -5,7 +5,7 @@ project(Clustering VERSION 1.0.0 LANGUAGES CXX)
 # Build Options
 # ============================================================================
 option(BUILD_TESTS "Build unit tests" ON)
-option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
+option(BUILD_BENCHMARKS "Build performance benchmarks" ON)
 option(BUILD_EXAMPLES "Build example programs" OFF)
 
 # ============================================================================
@@ -14,9 +14,6 @@ option(BUILD_EXAMPLES "Build example programs" OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# Note: C++26 is very cutting-edge. Consider C++20 or C++23 for better compatibility
-# set(CMAKE_CXX_STANDARD 20)  # More widely supported
 
 # ============================================================================
 # vcpkg Configuration
@@ -34,7 +31,6 @@ endif()
 find_package(fmt CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS math)
 find_package(Eigen3 CONFIG REQUIRED)
-find_package(benchmark CONFIG REQUIRED)
 
 # Conditionally find test/benchmark dependencies
 if(BUILD_BENCHMARKS)
@@ -48,9 +44,6 @@ endif()
 # ============================================================================
 # Library Target (Core Clustering Algorithms)
 # ============================================================================
-# This is crucial - your algorithms should be in a library that can be
-# linked by the main executable, tests, and benchmarks
-
 add_library(clustering_lib STATIC
         src/dummy.cpp
         # Add your source files here as you create them
@@ -72,13 +65,12 @@ target_include_directories(clustering_lib
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Link dependencies to library
+# Link dependencies to library (removed benchmark::benchmark_main)
 target_link_libraries(clustering_lib
         PUBLIC
         Eigen3::Eigen
         fmt::fmt
         Boost::math
-        benchmark::benchmark_main
 )
 
 # Compiler-specific optimizations
@@ -98,11 +90,10 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ============================================================================
-# Main Executable
+# Main Executable (FIXED - removed benchmark files)
 # ============================================================================
 add_executable(Clustering
         src/main.cpp
-        benchmarks/run_benchmarks.cpp
 )
 
 target_link_libraries(Clustering
@@ -178,7 +169,6 @@ message(STATUS "  Dependencies:")
 message(STATUS "    Eigen3               : ${Eigen3_VERSION}")
 message(STATUS "    fmt                  : ${fmt_VERSION}")
 message(STATUS "    Boost                : ${Boost_VERSION}")
-message(STATUS "    Benchmark            : ${Benchmark_VERSION}")
 if(BUILD_BENCHMARKS)
     message(STATUS "    Google Benchmark     : Found")
 endif()
