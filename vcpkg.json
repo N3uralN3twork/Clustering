@@ -1,14 +1,11 @@
 {
-  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "name": "qc",
-  "version": "1.0.0",
-  "description": "High-performance clustering library with validation metrics",
-  "dependencies": [
-    "eigen3",
-    "fmt",
-    "boost-math",
-    "benchmark",
-    "gtest"
-  ],
-  "builtin-baseline": "50c0cb48a0cf2f6fc5c7b2c0d2bafbe26d0a7ca2"
+  "$schema" : "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name" : "qc",
+  "version" : "1.0.0",
+  "description" : "High-performance clustering library with validation metrics",
+  "dependencies" : [ "eigen3", "fmt", "boost-math", "benchmark", "gtest", {
+    "name" : "tabulate",
+    "version>=" : "1.5"
+  } ],
+  "builtin-baseline" : "50c0cb48a0cf2f6fc5c7b2c0d2bafbe26d0a7ca2"
 }

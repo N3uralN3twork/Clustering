@@ -31,6 +31,7 @@ endif()
 find_package(fmt CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS math)
 find_package(Eigen3 CONFIG REQUIRED)
+find_package(tabulate CONFIG REQUIRED)
 
 # Conditionally find test/benchmark dependencies
 if(BUILD_BENCHMARKS)
@@ -71,6 +72,7 @@ target_link_libraries(clustering_lib
         Eigen3::Eigen
         fmt::fmt
         Boost::math
+        tabulate::tabulate
 )
 
 # Compiler-specific optimizations
@@ -169,6 +171,7 @@ message(STATUS "  Dependencies:")
 message(STATUS "    Eigen3               : ${Eigen3_VERSION}")
 message(STATUS "    fmt                  : ${fmt_VERSION}")
 message(STATUS "    Boost                : ${Boost_VERSION}")
+message(STATUS "    tabulate             : ${tabulate_VERSION}")
 if(BUILD_BENCHMARKS)
     message(STATUS "    Google Benchmark     : Found")
 endif()
