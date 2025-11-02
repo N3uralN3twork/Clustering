@@ -119,7 +119,9 @@ struct Config {
     struct MetricFlags {
         // Internal metrics (add more as you implement them)
         bool ball_hall = true;
+        bool c_index = true;
         bool calinski_harabasz = true;
+        bool davies_bouldin_index = true;
         bool trace_w = true;
 
         // External metrics (add more as you implement them)
@@ -138,11 +140,11 @@ struct Config {
  * specified standard deviation.
  */
 Eigen::MatrixXd generate_blobs(
-    int n_samples,
-    int n_features,
-    int n_clusters,
-    double cluster_std,
-    int random_seed
+    const int n_samples,
+    const int n_features,
+    const int n_clusters,
+    const double cluster_std,
+    const int random_seed
 ) {
     std::mt19937 gen(random_seed);
     std::uniform_real_distribution<> center_dist(-10.0, 10.0);
@@ -158,11 +160,11 @@ Eigen::MatrixXd generate_blobs(
 
     // Generate samples
     Eigen::MatrixXd data(n_samples, n_features);
-    int samples_per_cluster = n_samples / n_clusters;
+    const int samples_per_cluster = n_samples / n_clusters;
 
     for (int c = 0; c < n_clusters; ++c) {
-        int start_idx = c * samples_per_cluster;
-        int end_idx = (c == n_clusters - 1) ? n_samples : (c + 1) * samples_per_cluster;
+        const int start_idx = c * samples_per_cluster;
+        const int end_idx = (c == n_clusters - 1) ? n_samples : (c + 1) * samples_per_cluster;
 
         for (int i = start_idx; i < end_idx; ++i) {
             for (int j = 0; j < n_features; ++j) {
@@ -189,10 +191,10 @@ Eigen::MatrixXd generate_blobs(
  */
 Eigen::VectorXi kmeans(
     const Eigen::MatrixXd& data,
-    int k,
-    int max_iter,
-    double tol,
-    int random_seed
+    const int k,
+    const int max_iter,
+    const double tol,
+    const int random_seed
 ) {
     const int n_samples = data.rows();
     const int n_features = data.cols();
@@ -306,6 +308,18 @@ MetricRegistry initialize_metrics(const Config& config) {
         ));
     }
 
+    if (config.metrics.c_index) {
+        registry.add_metric(MetricInfo(
+            "C-Index",
+            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
+               const Eigen::Ref<const Eigen::VectorXi>& labels) {
+                return qc::internal::Metrics::c_index<double>(data, labels);
+            },
+            MetricDirection::LOWER_IS_BETTER,
+            MetricCategory::INTERNAL
+        ));
+    }
+
     if (config.metrics.calinski_harabasz) {
         registry.add_metric(MetricInfo(
             "Calinski-Harabasz",
@@ -314,6 +328,18 @@ MetricRegistry initialize_metrics(const Config& config) {
                 return qc::internal::Metrics::calinski_harabasz_index<double>(data, labels);
             },
             MetricDirection::HIGHER_IS_BETTER,
+            MetricCategory::INTERNAL
+        ));
+    }
+
+    if (config.metrics.davies_bouldin_index) {
+        registry.add_metric(MetricInfo(
+            "Davies-Bouldin",
+            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
+               const Eigen::Ref<const Eigen::VectorXi>& labels) {
+                return qc::internal::Metrics::davies_bouldin_index<double>(data, labels);
+            },
+            MetricDirection::LOWER_IS_BETTER,
             MetricCategory::INTERNAL
         ));
     }
@@ -518,11 +544,6 @@ Table create_metrics_table(const MetricsResults& results) {
 
         // Add metric name with direction indicator
         std::string name_with_arrow = metric.metric_name;
-        if (metric.direction == MetricDirection::LOWER_IS_BETTER) {
-            name_with_arrow += " down";
-        } else {
-            name_with_arrow += " up";
-        }
         metric_row.push_back(name_with_arrow);
 
         // Add metric values for each k
@@ -545,7 +566,7 @@ Table create_metrics_table(const MetricsResults& results) {
 
         // Format metric name column
         table[row_idx][0].format()
-            .font_color(Color::cyan)
+            .font_color(Color::red)
             .font_style({FontStyle::bold});
 
         // Highlight best value for this metric
@@ -555,7 +576,8 @@ Table create_metrics_table(const MetricsResults& results) {
                 table[row_idx][i + 1].format()
                     .font_color(Color::green)
                     .font_style({FontStyle::bold})
-                    .font_background_color(Color::yellow);
+                    .font_background_color(Color::none)
+                    .font_style({FontStyle::underline});
             }
         }
 
