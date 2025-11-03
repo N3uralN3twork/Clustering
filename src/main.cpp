@@ -131,6 +131,40 @@ struct Config {
 };
 
 // ============================================================================
+// Command-line Argument Parsing
+// ============================================================================
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " [OPTIONS]\n"
+              << "Options:\n"
+              << "  --n-samples NUM    Number of samples (default: 5000)\n"
+              << "  --n-features NUM   Number of features (default: 4)\n"
+              << "  --help             Show this help message\n";
+}
+
+bool parse_args(int argc, char* argv[], Config& config) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return false;
+        }
+        else if (arg == "--n-samples" && i + 1 < argc) {
+            config.N_SAMPLES = std::stoi(argv[++i]);
+        }
+        else if (arg == "--n-features" && i + 1 < argc) {
+            config.N_FEATURES = std::stoi(argv[++i]);
+        }
+        else {
+            std::cerr << "Unknown argument: " << arg << "\n";
+            print_usage(argv[0]);
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
 // Synthetic Data Generation
 // ============================================================================
 /**
@@ -247,7 +281,6 @@ Eigen::VectorXi kmeans(
                     best_label = c;
                 }
             }
-
             labels(i) = best_label;
         }
 
@@ -262,15 +295,14 @@ Eigen::VectorXi kmeans(
 }
 
 // ============================================================================
-// Metrics Results Structure
+// Metrics Result Structures
 // ============================================================================
 struct MetricResult {
     std::string metric_name;
-    std::vector<double> values;  // One value per k
-    int best_k;
-    double total_computation_time_ms;
+    std::vector<double> values;           // Values for each k
+    int best_k;                            // Optimal k according to this metric
     MetricDirection direction;
-    MetricCategory category;
+    double total_computation_time_ms;     // Total time to compute for all k values
 };
 
 struct MetricsResults {
@@ -279,107 +311,65 @@ struct MetricsResults {
 };
 
 // ============================================================================
-// Initialize Metric Registry
+// Initialize Metrics
 // ============================================================================
-/**
- * @brief Initializes the metric registry with all available metrics.
- *
- * TO ADD A NEW METRIC:
- * 1. Add the metric implementation to metrics.hpp
- * 2. Add an enable/disable flag to Config::MetricFlags
- * 3. Add a single line here following the pattern below
- */
 MetricRegistry initialize_metrics(const Config& config) {
     MetricRegistry registry;
 
-    // ========================================================================
-    // INTERNAL METRICS
-    // ========================================================================
-
+    // Register internal metrics (conditioned on config flags)
     if (config.metrics.ball_hall) {
-        registry.add_metric(MetricInfo(
-            "Ball-Hall",
-            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-               const Eigen::Ref<const Eigen::VectorXi>& labels) {
-                return qc::internal::Metrics::ball_hall_index<double>(data, labels);
-            },
+        registry.add_metric({
+            "Ball-Hall Index",
+            qc::internal::Metrics::ball_hall_index<double>,
             MetricDirection::LOWER_IS_BETTER,
             MetricCategory::INTERNAL
-        ));
+        });
     }
 
     if (config.metrics.c_index) {
-        registry.add_metric(MetricInfo(
+        registry.add_metric({
             "C-Index",
-            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-               const Eigen::Ref<const Eigen::VectorXi>& labels) {
-                return qc::internal::Metrics::c_index<double>(data, labels);
-            },
+            qc::internal::Metrics::c_index<double>,
             MetricDirection::LOWER_IS_BETTER,
             MetricCategory::INTERNAL
-        ));
+        });
     }
 
     if (config.metrics.calinski_harabasz) {
-        registry.add_metric(MetricInfo(
-            "Calinski-Harabasz",
-            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-               const Eigen::Ref<const Eigen::VectorXi>& labels) {
-                return qc::internal::Metrics::calinski_harabasz_index<double>(data, labels);
-            },
+        registry.add_metric({
+            "Calinski-Harabasz Index",
+            qc::internal::Metrics::calinski_harabasz_index<double>,
             MetricDirection::HIGHER_IS_BETTER,
             MetricCategory::INTERNAL
-        ));
+        });
     }
 
     if (config.metrics.davies_bouldin_index) {
-        registry.add_metric(MetricInfo(
-            "Davies-Bouldin",
-            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-               const Eigen::Ref<const Eigen::VectorXi>& labels) {
-                return qc::internal::Metrics::davies_bouldin_index<double>(data, labels);
-            },
+        registry.add_metric({
+            "Davies-Bouldin Index",
+            qc::internal::Metrics::davies_bouldin_index<double>,
             MetricDirection::LOWER_IS_BETTER,
             MetricCategory::INTERNAL
-        ));
+        });
     }
 
     if (config.metrics.trace_w) {
-        registry.add_metric(MetricInfo(
+        registry.add_metric({
             "Trace(W)",
-            [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-               const Eigen::Ref<const Eigen::VectorXi>& labels) {
-                return qc::internal::Metrics::trace_w_index<double>(data, labels);
-            },
+            qc::internal::Metrics::trace_w_index<double>,  // Note: _index suffix
             MetricDirection::LOWER_IS_BETTER,
             MetricCategory::INTERNAL
-        ));
+        });
     }
 
-    // ========================================================================
-    // EXTERNAL METRICS (uncomment and add as you implement them)
-    // ========================================================================
-
-    // if (config.metrics.adjusted_rand_index) {
-    //     registry.add_metric(MetricInfo(
-    //         "Adjusted Rand Index",
-    //         [](const Eigen::Ref<const Eigen::MatrixXd>& data,
-    //            const Eigen::Ref<const Eigen::VectorXi>& labels) {
-    //             return qc::external::Metrics::adjusted_rand_index<double>(data, labels);
-    //         },
-    //         MetricDirection::HIGHER_IS_BETTER,
-    //         MetricCategory::EXTERNAL
-    //     ));
-    // }
-
-    // Sort metrics alphabetically
+    // Sort alphabetically for consistent output
     registry.sort_alphabetically();
 
     return registry;
 }
 
 // ============================================================================
-// Compute Metrics for All k Values
+// Compute Metrics for All K
 // ============================================================================
 MetricsResults compute_metrics_for_all_k(
     const Eigen::MatrixXd& data,
@@ -387,87 +377,77 @@ MetricsResults compute_metrics_for_all_k(
     MetricRegistry& registry
 ) {
     MetricsResults results;
-    results.k_values.reserve(config.MAX_CLUSTERS - config.MIN_CLUSTERS + 1);
 
-    std::cout << "\n" << fmt::format("Running K-means for k = {} to {}...\n",
-                                      config.MIN_CLUSTERS, config.MAX_CLUSTERS);
-
-    // Store labels for each k value
-    std::vector<Eigen::VectorXi> all_labels;
-    all_labels.reserve(config.MAX_CLUSTERS - config.MIN_CLUSTERS + 1);
-
-    // Run K-means for each k value and store labels
+    // Generate k values to test
     for (int k = config.MIN_CLUSTERS; k <= config.MAX_CLUSTERS; ++k) {
-        std::cout << fmt::format("  k = {}: Running K-means... ", k) << std::flush;
-
-        Eigen::VectorXi labels = kmeans(data, k, config.MAX_KMEANS_ITER,
-                                       config.KMEANS_TOL, config.RANDOM_SEED);
-        all_labels.push_back(labels);
         results.k_values.push_back(k);
-
-        std::cout << "Done\n";
     }
 
-    // Compute metrics
-    std::cout << "\nComputing metrics...\n";
+    std::cout << fmt::format("\nRunning K-means for k = {} to {}...\n",
+                            config.MIN_CLUSTERS, config.MAX_CLUSTERS);
 
-    for (auto& metric_info : registry.get_metrics()) {
+    // Store clusterings for each k
+    std::map<int, Eigen::VectorXi> clusterings;
+    for (int k : results.k_values) {
+        clusterings[k] = kmeans(data, k, config.MAX_KMEANS_ITER,
+                               config.KMEANS_TOL, config.RANDOM_SEED);
+    }
+
+    std::cout << "Computing metrics for each clustering...\n";
+
+    // Compute each metric for all k values
+    for (const auto& metric_info : registry.get_metrics()) {
         if (!metric_info.enabled) continue;
 
-        std::cout << fmt::format("  {}: ", metric_info.name) << std::flush;
+        MetricResult metric_result;
+        metric_result.metric_name = metric_info.name;
+        metric_result.direction = metric_info.direction;
 
-        MetricResult result;
-        result.metric_name = metric_info.name;
-        result.direction = metric_info.direction;
-        result.category = metric_info.category;
-        result.values.reserve(all_labels.size());
-
-        // Time the metric computation across all k values
         auto start_time = std::chrono::high_resolution_clock::now();
 
-        for (size_t i = 0; i < all_labels.size(); ++i) {
-            double value = metric_info.function(data, all_labels[i]);
-            result.values.push_back(value);
+        // Compute metric for each k
+        for (int k : results.k_values) {
+            double value = metric_info.function(data, clusterings[k]);
+            metric_result.values.push_back(value);
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        result.total_computation_time_ms = duration.count() / 1000.0;
+        metric_result.total_computation_time_ms =
+            std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
-        // Find best k
+        // Find best k according to this metric
         if (metric_info.direction == MetricDirection::LOWER_IS_BETTER) {
-            auto min_it = std::min_element(result.values.begin(), result.values.end());
-            result.best_k = results.k_values[std::distance(result.values.begin(), min_it)];
+            auto min_it = std::min_element(metric_result.values.begin(),
+                                          metric_result.values.end());
+            size_t min_idx = std::distance(metric_result.values.begin(), min_it);
+            metric_result.best_k = results.k_values[min_idx];
         } else {
-            auto max_it = std::max_element(result.values.begin(), result.values.end());
-            result.best_k = results.k_values[std::distance(result.values.begin(), max_it)];
+            auto max_it = std::max_element(metric_result.values.begin(),
+                                          metric_result.values.end());
+            size_t max_idx = std::distance(metric_result.values.begin(), max_it);
+            metric_result.best_k = results.k_values[max_idx];
         }
 
-        results.metric_results.push_back(result);
-
-        std::cout << fmt::format("Done ({:.2f} ms)\n", result.total_computation_time_ms);
+        results.metric_results.push_back(metric_result);
     }
 
     return results;
 }
 
 // ============================================================================
-// Create Configuration Summary Table
+// Create Configuration Table
 // ============================================================================
 Table create_config_table(const Config& config) {
     Table table;
 
-    // Title row - must match column count
-    table.add_row({"Configuration Parameters", ""});
+    // Title row
+    table.add_row({"Configuration", "Value"});
     table[0].format()
         .font_align(FontAlign::center)
         .font_color(Color::cyan)
         .font_style({FontStyle::bold, FontStyle::underline});
 
-    // Merge title row cells to span both columns
-    table[0][0].format();
-
-    // Parameter rows
+    // Header row
     table.add_row({"Parameter", "Value"});
     table[1].format()
         .font_align(FontAlign::center)
@@ -610,16 +590,21 @@ Table create_metrics_table(const MetricsResults& results) {
 // ============================================================================
 // Main Function
 // ============================================================================
-int main() {
+int main(int argc, char* argv[]) {
+    // Initialize configuration
+    Config config;
+
+    // Parse command-line arguments
+    if (!parse_args(argc, argv, config)) {
+        return argc > 1 ? 1 : 0;  // Return error if args were invalid, success if --help
+    }
+
     // Print banner
     std::cout << "\n";
     std::cout << "[================================================================]\n";
     std::cout << "|  Clustering Validation Metrics - K-means Testing Framework     |\n";
     std::cout << "[================================================================]\n";
     std::cout << "\n";
-
-    // Initialize configuration
-    Config config;
 
     // Initialize metric registry
     MetricRegistry registry = initialize_metrics(config);

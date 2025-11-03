@@ -160,7 +160,7 @@ public:
             S_min += distances_copy[i];
         }
 
-        // For S_max: find N_w largest values
+        // For S_max: find the N_w largest values
         // Use nth_element + partial_sort for efficiency
         std::nth_element(
             distances.begin(),
