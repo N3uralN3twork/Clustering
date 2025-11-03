@@ -16,7 +16,7 @@ on:
 
   push:
     branches:
-      - main
+      - master
 
 env:
   DEFAULT_N_SAMPLES: 1000
@@ -47,11 +47,7 @@ jobs:
 
       - name: Install dependencies via vcpkg
         run: |
-          ${{ github.workspace }}/vcpkg/vcpkg install \
-            eigen3 \
-            fmt \
-            boost-math \
-            tabulate
+          ${{ github.workspace }}/vcpkg/vcpkg install
 
       - name: Set benchmark parameters
         id: params
